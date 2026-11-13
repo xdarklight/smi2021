@@ -63,11 +63,8 @@
 #define SMI2021_REG_STREAM_EN		0x1800
 #define SMI2021_REG_STREAM_EN_ON	0x0d
 
-/* saa7113 compatible video decoder */
+/* I2C address of the saa7113 compatible video decoder */
 #define SMI2021_DECODER_I2C_ADDR	0x4a
-#define SMI2021_DECODER_CHROMA_CNTL_1	0x0e
-/* Every write with CDTO set resets the colour subcarrier DTO phase */
-#define SMI2021_DECODER_CDTO		BIT(7)
 
 /*
  * The isochronous stream consists of chunks, each of them starting with a
@@ -555,7 +552,6 @@ int smi2021_start_streaming(struct vb2_queue *vq, unsigned int count)
 	struct smi2021 *smi2021 = vb2_get_drv_priv(vq);
 	unsigned int i;
 	int rc;
-	u8 reg;
 
 	smi2021->sequence = 0;
 	smi2021->trc_prefix_len = 0;
@@ -566,19 +562,6 @@ int smi2021_start_streaming(struct vb2_queue *vq, unsigned int count)
 		goto err_clear_queue;
 
 	v4l2_subdev_call(smi2021->decoder, video, s_stream, 1);
-
-	/*
-	 * The vendor driver resets the decoder's subcarrier DTO six times
-	 * before it starts streaming. It is not known whether this is needed.
-	 */
-	rc = smi2021_i2c_read(smi2021, SMI2021_DECODER_I2C_ADDR,
-			      SMI2021_DECODER_CHROMA_CNTL_1, &reg);
-	for (i = 0; !rc && i < 6; i++)
-		rc = smi2021_i2c_write(smi2021, SMI2021_DECODER_I2C_ADDR,
-				       SMI2021_DECODER_CHROMA_CNTL_1,
-				       reg | SMI2021_DECODER_CDTO);
-	if (rc)
-		goto err_stop_decoder;
 
 	rc = smi2021_set_mode(smi2021, SMI2021_MODE_CAPTURE);
 	if (rc)
