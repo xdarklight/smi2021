@@ -9,6 +9,9 @@
  * Copyright (C) 2012 Ezequiel Garcia <elezegarcia@gmail.com>
  */
 
+#include <linux/math.h>
+#include <linux/sizes.h>
+
 #include <sound/initval.h>
 #include <sound/pcm_params.h>
 
@@ -19,6 +22,18 @@
  * which is a 0x00 header that the driver uses to detect lost bytes.
  */
 #define SMI2021_AUDIO_SAMPLE_SIZE	sizeof(u32)
+#define SMI2021_AUDIO_CHANNELS		2
+#define SMI2021_AUDIO_FRAME_SIZE	(SMI2021_AUDIO_CHANNELS * \
+					 SMI2021_AUDIO_SAMPLE_SIZE)
+
+/*
+ * Audio data arrives in whole chunks, so shorter periods would elapse in
+ * bursts. The buffer is in vmalloc memory and not limited by the hardware,
+ * 256 KiB hold about 680 ms.
+ */
+#define SMI2021_AUDIO_PERIOD_MIN	round_up(SMI2021_CHUNK_DATA_SIZE, \
+						 SMI2021_AUDIO_FRAME_SIZE)
+#define SMI2021_AUDIO_BUFFER_MAX	SZ_256K
 
 static const struct snd_pcm_hardware smi2021_pcm_hw = {
 	.info = SNDRV_PCM_INFO_BLOCK_TRANSFER |
@@ -30,28 +45,23 @@ static const struct snd_pcm_hardware smi2021_pcm_hw = {
 	.rates = SNDRV_PCM_RATE_48000,
 	.rate_min = 48000,
 	.rate_max = 48000,
-	.channels_min = 2,
-	.channels_max = 2,
-	.period_bytes_min = 992,
-	.period_bytes_max = 15872,
-	.periods_min = 1,
-	.periods_max = 16,
-	.buffer_bytes_max = 65280,
+	.channels_min = SMI2021_AUDIO_CHANNELS,
+	.channels_max = SMI2021_AUDIO_CHANNELS,
+	.period_bytes_min = SMI2021_AUDIO_PERIOD_MIN,
+	.period_bytes_max = SMI2021_AUDIO_BUFFER_MAX / 2,
+	.periods_min = 2,
+	.periods_max = SMI2021_AUDIO_BUFFER_MAX / SMI2021_AUDIO_PERIOD_MIN,
+	.buffer_bytes_max = SMI2021_AUDIO_BUFFER_MAX,
 };
 
 static int smi2021_pcm_open(struct snd_pcm_substream *substream)
 {
 	struct snd_pcm_runtime *runtime = substream->runtime;
-	int rc;
 
 	runtime->hw = smi2021_pcm_hw;
 
-	rc = snd_pcm_hw_constraint_integer(runtime, SNDRV_PCM_HW_PARAM_PERIODS);
-	if (rc < 0)
-		return rc;
-
-	return snd_pcm_hw_constraint_pow2(runtime, 0,
-					  SNDRV_PCM_HW_PARAM_PERIODS);
+	return snd_pcm_hw_constraint_integer(runtime,
+					     SNDRV_PCM_HW_PARAM_PERIODS);
 }
 
 /*
@@ -143,7 +153,7 @@ static bool smi2021_audio_copy(struct smi2021 *smi2021,
 			       struct snd_pcm_runtime *runtime,
 			       const u8 *data, unsigned int len)
 {
-	unsigned int frame = frames_to_bytes(runtime, 1);
+	unsigned int frame = SMI2021_AUDIO_FRAME_SIZE;
 	unsigned int period = frames_to_bytes(runtime, runtime->period_size);
 	unsigned int ptr = smi2021->pcm_write_ptr;
 	unsigned int offset = smi2021->pcm_read_offset;
