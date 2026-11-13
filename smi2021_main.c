@@ -78,10 +78,6 @@
 #define SMI2021_REG_AUDIO_CTRL_ON	0x1d
 #define SMI2021_REG_AUDIO_CTRL_OFF	0x00
 
-/* Video engine control. The meaning of the value is not known. */
-#define SMI2021_REG_VIDEO_CTRL		0x1800
-#define SMI2021_REG_VIDEO_CTRL_ON	0x0d
-
 /* 7 bit I2C address of the saa7113 compatible decoder, 4AH in its datasheet */
 #define SMI2021_DECODER_I2C_ADDR	0x25
 
@@ -598,6 +594,7 @@ int smi2021_start_streaming(struct vb2_queue *vq, unsigned int count)
 	if (rc)
 		goto err_stop_decoder;
 
+	/* In capture mode this also makes the firmware start the video engine */
 	rc = usb_set_interface(smi2021->udev, smi2021->ifnum,
 			       SMI2021_ALT_STREAM);
 	if (rc)
@@ -614,11 +611,6 @@ int smi2021_start_streaming(struct vb2_queue *vq, unsigned int count)
 			goto err_kill_urbs;
 		}
 	}
-
-	rc = smi2021_write_reg(smi2021, SMI2021_REG_VIDEO_CTRL,
-			       SMI2021_REG_VIDEO_CTRL_ON);
-	if (rc)
-		goto err_kill_urbs;
 
 	return 0;
 
