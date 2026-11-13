@@ -25,17 +25,28 @@ module_param(firmware_version, uint, 0644);
 MODULE_PARM_DESC(firmware_version,
 		 "Firmware to upload to a device in bootloader mode, as all of them report the same USB product id. Accepted values: 0x3c, 0x3e, 0x3f");
 
+/*
+ * The firmware is uploaded in requests of 64 bytes, the packet size of the
+ * control endpoint, each of them a two byte header and a piece of firmware.
+ */
+struct smi2021_fw_chunk {
+	u8 head[2];
+	u8 data[SMI2021_FW_CHUNK_SIZE];
+} __packed;
+
 static int smi2021_load_firmware(struct usb_device *udev,
 				 const struct firmware *fw)
 {
-	u8 chunk[2 + SMI2021_FW_CHUNK_SIZE] = {
-		SMI2021_FW_CHUNK_HEAD, SMI2021_FW_CHUNK_HEAD_1,
+	struct smi2021_fw_chunk chunk = {
+		.head = { SMI2021_FW_CHUNK_HEAD, SMI2021_FW_CHUNK_HEAD_1 },
 	};
-	struct smi2021_hw_state state;
+	struct smi2021_hw_state state, ack = {
+		.head = SMI2021_FW_READY,
+	};
 	size_t i;
 	int rc;
 
-	if (fw->size % SMI2021_FW_CHUNK_SIZE) {
+	if (fw->size % sizeof(chunk.data)) {
 		dev_err(&udev->dev, "firmware has an invalid size\n");
 		return -EINVAL;
 	}
@@ -53,10 +64,11 @@ static int smi2021_load_firmware(struct usb_device *udev,
 		return -ENODEV;
 	}
 
-	for (i = 0; i < fw->size; i += SMI2021_FW_CHUNK_SIZE) {
-		memcpy(chunk + 2, fw->data + i, SMI2021_FW_CHUNK_SIZE);
+	for (i = 0; i < fw->size; i += sizeof(chunk.data)) {
+		memcpy(chunk.data, fw->data + i, sizeof(chunk.data));
 
-		rc = smi2021_ctrl_write(udev, chunk[0], chunk, sizeof(chunk));
+		rc = smi2021_ctrl_write(udev, chunk.head[0], &chunk,
+					sizeof(chunk));
 		if (rc) {
 			dev_err(&udev->dev, "firmware upload failed: %pe\n",
 				ERR_PTR(rc));
@@ -64,10 +76,7 @@ static int smi2021_load_firmware(struct usb_device *udev,
 		}
 	}
 
-	state.head = SMI2021_FW_READY;
-	state.state = 0x00;
-
-	rc = smi2021_ctrl_write(udev, state.head, &state, sizeof(state));
+	rc = smi2021_ctrl_write(udev, ack.head, &ack, sizeof(ack));
 	if (rc)
 		dev_err(&udev->dev, "device failed to ack the firmware: %pe\n",
 			ERR_PTR(rc));
@@ -84,6 +93,7 @@ static int smi2021_load_firmware(struct usb_device *udev,
  */
 int smi2021_bootloader_probe(struct usb_interface *intf)
 {
+	/* The firmware version is the product id the device has afterwards */
 	static const struct {
 		unsigned int	version;
 		const char	*name;

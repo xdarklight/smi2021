@@ -99,7 +99,7 @@ static int smi2021_fmt_vid_cap(struct file *file, void *priv,
 {
 	struct smi2021 *smi2021 = video_drvdata(file);
 
-	f->fmt.pix.width = SMI2021_BYTES_PER_LINE / 2;
+	f->fmt.pix.width = SMI2021_WIDTH;
 	f->fmt.pix.height = smi2021->cur_height;
 	f->fmt.pix.pixelformat = V4L2_PIX_FMT_UYVY;
 	f->fmt.pix.field = V4L2_FIELD_INTERLACED;
@@ -119,7 +119,7 @@ static int smi2021_enum_framesizes(struct file *file, void *priv,
 		return -EINVAL;
 
 	fsize->type = V4L2_FRMSIZE_TYPE_DISCRETE;
-	fsize->discrete.width = SMI2021_BYTES_PER_LINE / 2;
+	fsize->discrete.width = SMI2021_WIDTH;
 	fsize->discrete.height = smi2021->cur_height;
 
 	return 0;

@@ -33,7 +33,9 @@
 /* Head byte of the request that reads the hardware state or sets the mode */
 #define SMI2021_HW_STATE_HEAD		0x01
 
-#define SMI2021_BYTES_PER_LINE		1440
+/* The decoder sends 720 pixels per line in UYVY, two bytes per pixel */
+#define SMI2021_WIDTH			720
+#define SMI2021_BYTES_PER_LINE		(SMI2021_WIDTH * 2)
 #define SMI2021_PAL_LINES		576
 #define SMI2021_NTSC_LINES		480
 
@@ -88,8 +90,9 @@ struct smi2021 {
 	struct mutex			vb_queue_lock;
 
 	u8				ifnum;
-	u8				isoc_ep;
+	u8				iso_ep;
 	unsigned int			iso_size;
+	unsigned int			iso_interval;
 	unsigned int			num_urbs;
 	struct urb			*urbs[SMI2021_ISOC_TRANSFERS];
 

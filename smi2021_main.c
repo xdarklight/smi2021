@@ -27,10 +27,10 @@
 /* Vendor specific control request used for all register access */
 #define SMI2021_USB_REQUEST		0x01
 #define SMI2021_USB_INDEX		0x00
-#define SMI2021_CTRL_TIMEOUT		1000	/* ms */
 
-/* Alternate setting with the isochronous endpoint */
-#define SMI2021_ALTSETTING		2
+/* Alternate settings without and with the isochronous endpoint */
+#define SMI2021_ALT_IDLE		0
+#define SMI2021_ALT_STREAM		2
 #define SMI2021_ISOC_PACKETS		10
 
 /* Values of smi2021_hw_state.state */
@@ -71,7 +71,7 @@
  * magic word that identifies its payload.
  */
 #define SMI2021_CHUNK_SIZE		0x400
-#define SMI2021_CHUNK_HDR_SIZE		4
+#define SMI2021_CHUNK_HDR_SIZE		sizeof(__be32)
 #define SMI2021_CHUNK_MAGIC_VIDEO	0xaaaa0000
 #define SMI2021_CHUNK_MAGIC_AUDIO	0xaaaa0001
 
@@ -102,6 +102,7 @@ struct smi2021_reg_msg {
 		u8 reserved[8];
 	} __packed data;
 } __packed;
+/* The size of the request on the wire */
 static_assert(sizeof(struct smi2021_reg_msg) == 13);
 
 int smi2021_ctrl_write(struct usb_device *udev, u16 value, const void *data,
@@ -110,7 +111,7 @@ int smi2021_ctrl_write(struct usb_device *udev, u16 value, const void *data,
 	return usb_control_msg_send(udev, 0, SMI2021_USB_REQUEST,
 				    USB_DIR_OUT | USB_TYPE_VENDOR |
 				    USB_RECIP_DEVICE, value, SMI2021_USB_INDEX,
-				    data, size, SMI2021_CTRL_TIMEOUT,
+				    data, size, USB_CTRL_SET_TIMEOUT,
 				    GFP_KERNEL);
 }
 
@@ -120,7 +121,7 @@ int smi2021_ctrl_read(struct usb_device *udev, u16 value, void *data,
 	return usb_control_msg_recv(udev, 0, SMI2021_USB_REQUEST,
 				    USB_DIR_IN | USB_TYPE_VENDOR |
 				    USB_RECIP_DEVICE, value, SMI2021_USB_INDEX,
-				    data, size, SMI2021_CTRL_TIMEOUT,
+				    data, size, USB_CTRL_GET_TIMEOUT,
 				    GFP_KERNEL);
 }
 
@@ -275,11 +276,17 @@ static struct smi2021_buf *smi2021_get_buf(struct smi2021 *smi2021)
 	return buf;
 }
 
+/* Each of the two interlaced fields carries every other line of a frame */
+static unsigned int smi2021_field_lines(const struct smi2021 *smi2021)
+{
+	return smi2021->cur_height / 2;
+}
+
 /* Whether all lines of the current field have been received */
 static bool smi2021_field_done(struct smi2021 *smi2021,
 			       const struct smi2021_buf *buf)
 {
-	return buf->pos >= SMI2021_BYTES_PER_LINE * (smi2021->cur_height / 2);
+	return buf->pos >= SMI2021_BYTES_PER_LINE * smi2021_field_lines(smi2021);
 }
 
 static void smi2021_buf_done(struct smi2021 *smi2021)
@@ -355,7 +362,7 @@ static void smi2021_parse_trc(struct smi2021 *smi2021, u8 trc)
 static void smi2021_copy_video(struct smi2021 *smi2021, const u8 *src,
 			       unsigned int len)
 {
-	unsigned int lines_per_field = smi2021->cur_height / 2;
+	unsigned int lines_per_field = smi2021_field_lines(smi2021);
 	struct smi2021_buf *buf = smi2021->cur_buf;
 
 	if (!buf || buf->in_blank)
@@ -393,19 +400,19 @@ static void smi2021_parse_video(struct smi2021 *smi2021, const u8 *p,
 	while (i < size) {
 		if (!smi2021->trc_prefix_len) {
 			/* Copy video data up to the next potential code */
-			const u8 *ff = memchr(p + i, 0xff, size - i);
-			unsigned int len = ff ? ff - (p + i) : size - i;
+			const u8 *start = memchr(p + i, trc_prefix[0], size - i);
+			unsigned int len = start ? start - (p + i) : size - i;
 
 			smi2021_copy_video(smi2021, p + i, len);
 			i += len;
-			if (ff) {
+			if (start) {
 				smi2021->trc_prefix_len = 1;
 				i++;
 			}
 		} else if (smi2021->trc_prefix_len == sizeof(trc_prefix)) {
 			smi2021->trc_prefix_len = 0;
 			smi2021_parse_trc(smi2021, p[i++]);
-		} else if (p[i] == 0x00) {
+		} else if (p[i] == trc_prefix[smi2021->trc_prefix_len]) {
 			smi2021->trc_prefix_len++;
 			i++;
 		} else {
@@ -518,12 +525,12 @@ static int smi2021_alloc_isoc(struct smi2021 *smi2021)
 			goto err_free;
 
 		urb->dev = smi2021->udev;
-		urb->pipe = usb_rcvisocpipe(smi2021->udev, smi2021->isoc_ep);
+		urb->pipe = usb_rcvisocpipe(smi2021->udev, smi2021->iso_ep);
 		urb->transfer_buffer_length = size;
 		urb->transfer_flags = URB_ISO_ASAP | URB_FREE_BUFFER;
 		urb->complete = smi2021_isoc_complete;
 		urb->context = smi2021;
-		urb->interval = 1;
+		urb->interval = smi2021->iso_interval;
 		urb->number_of_packets = SMI2021_ISOC_PACKETS;
 
 		for (i = 0; i < SMI2021_ISOC_PACKETS; i++) {
@@ -568,7 +575,7 @@ int smi2021_start_streaming(struct vb2_queue *vq, unsigned int count)
 		goto err_stop_decoder;
 
 	rc = usb_set_interface(smi2021->udev, smi2021->ifnum,
-			       SMI2021_ALTSETTING);
+			       SMI2021_ALT_STREAM);
 	if (rc)
 		goto err_standby;
 
@@ -593,7 +600,7 @@ int smi2021_start_streaming(struct vb2_queue *vq, unsigned int count)
 
 err_kill_urbs:
 	smi2021_kill_isoc(smi2021);
-	usb_set_interface(smi2021->udev, smi2021->ifnum, 0);
+	usb_set_interface(smi2021->udev, smi2021->ifnum, SMI2021_ALT_IDLE);
 err_standby:
 	smi2021_set_mode(smi2021, SMI2021_MODE_STANDBY);
 err_stop_decoder:
@@ -615,7 +622,8 @@ void smi2021_stop_streaming(struct vb2_queue *vq)
 	if (smi2021->udev) {
 		v4l2_subdev_call(smi2021->decoder, video, s_stream, 0);
 		smi2021_set_mode(smi2021, SMI2021_MODE_STANDBY);
-		usb_set_interface(smi2021->udev, smi2021->ifnum, 0);
+		usb_set_interface(smi2021->udev, smi2021->ifnum,
+				  SMI2021_ALT_IDLE);
 	}
 
 	smi2021_free_isoc(smi2021);
@@ -702,6 +710,7 @@ static int smi2021_usb_probe(struct usb_interface *intf,
 		I2C_BOARD_INFO("saa7115_auto", SMI2021_DECODER_I2C_ADDR),
 		.platform_data = &smi2021_decoder_pdata,
 	};
+	const struct usb_host_endpoint *ep;
 	struct usb_host_interface *alt;
 	struct smi2021 *smi2021;
 	int rc;
@@ -709,9 +718,12 @@ static int smi2021_usb_probe(struct usb_interface *intf,
 	if (!board)
 		return smi2021_bootloader_probe(intf);
 
-	alt = usb_altnum_to_altsetting(intf, SMI2021_ALTSETTING);
-	if (!alt || alt->desc.bNumEndpoints != 1 ||
-	    !usb_endpoint_is_isoc_in(&alt->endpoint[0].desc))
+	alt = usb_altnum_to_altsetting(intf, SMI2021_ALT_STREAM);
+	if (!alt || alt->desc.bNumEndpoints != 1)
+		return -ENODEV;
+
+	ep = &alt->endpoint[0];
+	if (!usb_endpoint_is_isoc_in(&ep->desc))
 		return -ENODEV;
 
 	smi2021 = kzalloc_obj(*smi2021);
@@ -722,10 +734,11 @@ static int smi2021_usb_probe(struct usb_interface *intf,
 	smi2021->udev = udev;
 	smi2021->board = board;
 	smi2021->ifnum = alt->desc.bInterfaceNumber;
-	smi2021->isoc_ep = usb_endpoint_num(&alt->endpoint[0].desc);
+	smi2021->iso_ep = usb_endpoint_num(&ep->desc);
 	/* 3072 bytes, as the endpoint has two additional transactions */
-	smi2021->iso_size = usb_endpoint_max_periodic_payload(udev,
-							      &alt->endpoint[0]);
+	smi2021->iso_size = usb_endpoint_max_periodic_payload(udev, ep);
+	/* In microframes, the descriptor holds the exponent plus one */
+	smi2021->iso_interval = 1 << (ep->desc.bInterval - 1);
 
 	mutex_init(&smi2021->reg_lock);
 	mutex_init(&smi2021->v4l2_lock);
