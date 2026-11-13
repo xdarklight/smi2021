@@ -29,6 +29,14 @@ Inputs are selected with the standard V4L2 input API, for example:
 v4l2-ctl -d /dev/video0 --list-inputs
 ```
 
+## Documentation
+
+[`docs/protocol.md`](docs/protocol.md) specifies the USB protocol of the
+device and what its firmware does with the bridge's hardware, as found by
+analyzing the firmware images. It contains no code from the firmware, so
+that it can serve as the basis for a driver or a replacement firmware
+written without looking at the original.
+
 ## Building
 
 ### In a kernel tree
