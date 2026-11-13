@@ -95,7 +95,7 @@ static int smi2021_s_input(struct file *file, void *priv, unsigned int i)
 		return -EINVAL;
 
 	rc = v4l2_subdev_call(smi2021->decoder, video, s_routing,
-			      smi2021->board->inputs[i].type, 0, 0);
+			      smi2021->board->inputs[i].route, 0, 0);
 	if (rc)
 		return rc;
 
@@ -569,7 +569,7 @@ int smi2021_v4l2_register(struct smi2021 *smi2021)
 
 	v4l2_subdev_call(smi2021->decoder, video, s_std, smi2021->cur_norm);
 	v4l2_subdev_call(smi2021->decoder, video, s_routing,
-			 smi2021->board->inputs[smi2021->cur_input].type, 0, 0);
+			 smi2021->board->inputs[smi2021->cur_input].route, 0, 0);
 
 	rc = smi2021_video_register(smi2021);
 	if (rc)

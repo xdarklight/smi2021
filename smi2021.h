@@ -66,7 +66,8 @@ struct smi2021_buf {
 
 struct smi2021_input {
 	const char			*name;
-	u32				type;
+	/* Input of the decoder that the connector is wired to */
+	u32				route;
 };
 
 struct smi2021_board {
