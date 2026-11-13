@@ -52,6 +52,11 @@ static int smi2021_enum_input(struct file *file, void *priv,
 	i->type = V4L2_INPUT_TYPE_CAMERA;
 	i->std = smi2021->vdev.tvnorms;
 
+	/* The decoder can only tell the signal status of the current input */
+	if (i->index == smi2021->cur_input)
+		v4l2_subdev_call(smi2021->decoder, video, g_input_status,
+				 &i->status);
+
 	return 0;
 }
 
