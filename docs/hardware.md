@@ -14,8 +14,9 @@ It was written from a static analysis of `smi2021_3c.bin` (MD5
 `90f78491e831e8db44cfdd6204a2b602`) and `smi2021_3f.bin` (MD5
 `6454abe92e7d60a3157d158f94afda9b`), compared with the ATmega103 and
 ATmega16 datasheets and the device headers of avr-libc, with the drivers
-for other controllers in Linux, U-Boot and Zephyr, and with Somagic's own
-descriptions of its other chips, see [Sources](#sources). It contains no
+for other controllers in Linux, U-Boot and Zephyr, with Somagic's own
+descriptions of its other chips, and with the vendor's Windows drivers, see
+[Sources](#sources). It contains no
 code from the firmware. Statements use the same markers as
 [`protocol.md`](protocol.md#about-this-document): unmarked statements are
 **observed** in the firmware, **inferred** ones are interpretations that
@@ -38,16 +39,17 @@ addresses are byte addresses, as in `avr-objdump` output.
 | SPI | 0x002d–0x002f (inferred) | presumably ATmega103, unused, see [SPI](#spi) |
 | SRAM | 0x0060–0x0fff | ATmega103 |
 | USB 2.0 device controller | 0x1500–0x157f | Somagic's own |
-| Engine of mode 3 | 0x1580 | Somagic's own |
+| Transport stream input with PID filters, mode 3 (inferred) | 0x1580–0x15a1 | Somagic's own |
 | Stream and IR control | 0x1600 | Somagic's own |
 | Audio engine | 0x1740 | Somagic's own |
-| First i2c engine | 0x1780–0x17bf (inferred extent) | Somagic's own, **not** Atmel's TWI |
+| First i2c engine | 0x1780–0x17a4 (inferred extent) | Somagic's own, **not** Atmel's TWI |
 | Video engine | 0x1800 | Somagic's own |
 | Stream source | 0x1880 | Somagic's own |
 | USB buffer memory | 0x2000– | Somagic's own |
 | System control | 0x3080 | Somagic's own |
 | Engine of mode 4 | 0x3100 | Somagic's own |
-| Second i2c engine | 0x3180–0x31bf (inferred extent) | same as the first one |
+| Second i2c engine | 0x3180–0x31a4 (inferred extent) | same as the first one |
+| Board identification (inferred) | 0x31a5 | Somagic's own |
 
 The processor and its peripherals are those of an Atmel ATmega103. None
 of the hardware specific to the device could be matched to a controller
@@ -104,7 +106,9 @@ whether the core has `ELPM` is not known.
 
 The bootloader writes the uploaded image to program memory from address 0
 and starts it there, see [Bootloader](protocol.md#bootloader). Program
-memory holds at least the 0x1d4e bytes of `smi2021_3c.bin`; its actual size
+memory holds at least the 0x1d4e bytes of `smi2021_3c.bin`, and presumably
+the 7812 bytes of the image of 2013 (see [Differences between the
+images](protocol.md#differences-between-the-images)); its actual size
 is unknown. Where the bootloader itself lives is unknown too: it is in ROM
 (inferred, as the device keeps no firmware), but whether that ROM is
 visible in program memory or data space is not known.
@@ -300,6 +304,7 @@ so presumably the hardware clears them by itself on resume (inferred).
 | 0x1510 | bits 2–1: 00 for normal operation, 10 to stall |
 | 0x1511 | written 0x03 at start |
 | 0x1513, 0x1515 | written 0x40 at start (inferred: the maximum packet size of each direction) |
+| 0x1517 | never read by the firmware; by the layout of the endpoint blocks, presumably the length of a received packet (inferred) |
 | 0x1518 | bit 7: the receive buffer holds a packet; the firmware clears it to free the buffer |
 | 0x1519–0x151a | address of the receive buffer, little endian, 0x2000 |
 | 0x151b | number of bytes to send |
@@ -351,18 +356,34 @@ the hardware:
 
 ### Endpoint register blocks
 
-Blocks A, B and C share one layout. Relative to its base:
+Blocks A, B and C have the layout of the control endpoint. Relative to its
+base:
 
 | Offset | Use |
 |--------|-----|
 | +0 | bits 2–1: state, see below; bit 0: cleared, after bits 2–1, when the host clears the halt feature (inferred: resets the data toggle) |
-| +1 | 0x15 or 0x25; see below |
+| +1 | endpoint number, type and direction, see below |
 | +3, +4 | maximum packet size, little endian |
-| +8, +12 | only for block B: cleared on every mode request |
+| +7 | length of the packet in buffer 0 |
+| +8 | bit 7: buffer 0 holds a packet |
+| +9, +10 | address of buffer 0, little endian |
+| +11 | length of the packet in buffer 1 |
+| +12 | bit 7: buffer 1 holds a packet |
+| +13, +14 | address of buffer 1, little endian |
+
+The control endpoint uses buffer 0 to receive and buffer 1 to send, see
+[Control endpoint](#control-endpoint). The image of 2013 (see [Differences
+between the images](protocol.md#differences-between-the-images)) sets up
+block C for its HID interrupt endpoint `0x83`: 0x34 in +1, 64 bytes as the
+maximum packet size, bit 7 of +8 and +12 cleared, and buffers at 0x2080 and
+0x20c0. It sends a report by writing the length to +7 or +11 and setting
+bit 7 of +8 or +12, using the two buffers in turn, so for an IN endpoint
+both buffers send (inferred: double buffering). It also sets bit 0 of +0
+for that endpoint. The buffer memory reaches at least to 0x20ff.
 
 The firmware names the blocks after endpoints in its handling of the halt
 feature and of `GET_STATUS`: A is `0x81`, B is `0x82` and C is `0x83`. The
-descriptors only have `0x82`.
+descriptors of `smi2021_3c.bin` and `smi2021_3f.bin` only have `0x82`.
 
 The mode request (see [Modes](protocol.md#modes)) writes 0x25 to +1 of one
 block and sets its state to 00, and writes 0x15 to +1 of the other one and
@@ -373,11 +394,13 @@ sets its state to 01:
 | 3, 5 | B | A |
 | 2, 4 | A | B |
 
-The most consistent reading of this is (inferred):
+Bits 7–4 of +1 are the endpoint number: 0x34 for endpoint `0x83` in the
+image of 2013 makes that all but certain, and it fits the names the
+firmware gives the blocks. Bit 2 is presumably the direction, IN, and bits
+1–0 the type, `01` for isochronous and `00` for interrupt (inferred). So
+0x25 makes a block endpoint `0x82` and 0x15 endpoint `0x81`. The rest of
+the most consistent reading is (inferred):
 
-- Bits 7–4 of +1 are the endpoint number, and the low bits the type and
-  direction (isochronous IN). So 0x25 is endpoint `0x82` and 0x15 is
-  endpoint `0x81`.
 - State 00 is normal operation, 01 disables the endpoint, and 10 stalls
   it. This is how the firmware treats the control endpoint, where 00 is
   normal operation and 10 stalls, and clearing the halt feature of an
@@ -387,10 +410,9 @@ The most consistent reading of this is (inferred):
   request makes the right block endpoint `0x82` and moves the other one
   out of the way as a disabled endpoint `0x81`.
 
-The opposite reading, with 01 as the enabled state, needs 0x15 to stand
-for endpoint `0x82`, and leaves unexplained why the firmware calls block A
-`0x81` while it is the one in use in modes 3 and 5. Either way, the
-experiment in [Experiments](#experiments) is needed to be sure.
+With 01 as the enabled state instead, the endpoint in use in modes 3 and 5
+would be block A, at endpoint `0x81`, which the host never reads. The
+experiment in [Experiments](#experiments) settles it.
 
 Other accesses:
 
@@ -402,10 +424,12 @@ Other accesses:
   0x0400 at high speed and 0x03ff at full speed. How the controller learns
   that alternate setting 2 sends three packets per microframe is unknown;
   the firmware writes nothing for it.
+- The mode request clears +8 and +12 of block B, which presumably drops
+  packets left in its buffers (inferred).
 
-Block C is endpoint `0x83` in `smi2021_3c.bin` only. The initial values of
-that image also contain unused pointers to 0x1547, 0x1548 and 0x1549, so
-block C presumably has registers there.
+Block C is endpoint `0x83` in `smi2021_3c.bin` only, where nothing sets it
+up; the initial values of that image contain unused pointers to 0x1547,
+0x1548 and 0x1549, the registers of its buffer 0.
 
 ## I2C engines
 
@@ -459,18 +483,20 @@ What the mode request and `SET_INTERFACE` write is listed in
     path);
   - in all modes, it then clears bit 7 of 0x1600.
 
-What the engines of modes 3 and 4 serve is unknown. Somagic's
-SMI-2020CBE has a transport stream input and a 1-bit stream input for a
-GPS receiver, see [Related chips](#related-chips), so these are
-candidates (inferred).
+The engine of mode 3 is presumably a transport stream input with 16 PID
+filters at 0x1582 to 0x15a1, which the Windows drivers know how to program,
+see [Transport stream input](protocol.md#transport-stream-input). What the
+engine of mode 4 serves is unknown; Somagic's SMI-2020CBE also has a 1-bit
+stream input for a GPS receiver (see [Related chips](#related-chips)),
+which would be a candidate (inferred). The image of 2013 drops mode 4.
 
 ### System control register 0x3080
 
 | Bit | Use |
 |-----|-----|
-| 7 | cleared at the host's request (`wValue` 0xfb); never set by the firmware |
-| 4 | set on suspend |
-| 2 | pulsed by the unused stop function |
+| 7 | cleared at the host's request (`wValue` 0xfb); never set by the firmware, and used by none of the Windows drivers |
+| 4 | set on suspend; the Windows driver initializes the device again when it finds it set, see [Initialization](protocol.md#initialization) |
+| 2 | pulsed by the unused stop function, and for 10 ms by the Windows driver before it programs the PID filters, after which it writes 0x1600 again; so it presumably resets the stream paths, including 0x1600 (inferred) |
 
 ## Infrared receiver
 
@@ -608,7 +634,11 @@ With the original firmware:
    find the size of the buffer; scan the second bus for devices.
 5. **Endpoint blocks**: in mode 5, swap the values of +1 or the states of
    blocks A and B, and see which block's data arrives at endpoint `0x82`.
-6. **Modes 3 and 4**: stream in each mode and look at what arrives.
+6. **Modes 3 and 4**: stream in each mode and look at what arrives. Mode 3
+   should be a transport stream input, which an EasyCAP doesn't feed, so
+   empty packets are likely; programming a PID filter and seeing whether
+   0x1580 and the filters read back as written would confirm the
+   registers.
 7. **GPIO**: find what `PA7`, `PC0`, `PC1`, `PC2` and `PC4` are connected
    to.
 
@@ -627,11 +657,16 @@ With a test firmware:
 
 - Atmel ATmega103 and ATmega16 datasheets, and the device headers
   `iom103.h` and `iom16.h` of avr-libc.
-- Somagic's product pages, as kept by the Internet Archive:
-  <http://www.somagic.com.cn/product_info.asp?id=60> (SMI-2020CBE),
-  <http://www.somagic.com.cn/product_info.asp?id=61> (SMI-2030) and
-  <http://www.somagic.com.cn/product_info.asp?id=51> (SMI-2022CBG reference
-  design), from 2009 to 2016.
+- Somagic's product pages on `www.somagic.com.cn`, from 2009 to 2016, as
+  kept by the Internet Archive:
+  <http://web.archive.org/web/20101018145745/http://www.somagic.com.cn:80/product_info.asp?id=60>
+  (SMI-2020CBE),
+  <http://web.archive.org/web/20101018145750/http://www.somagic.com.cn:80/product_info.asp?id=61>
+  (SMI-2030) and
+  <http://web.archive.org/web/20101018145734/http://www.somagic.com.cn:80/product_info.asp?id=51>
+  (SMI-2022CBG reference design).
+- The vendor's Windows drivers and the image of 2013 that came with one,
+  as listed in [Sources](protocol.md#sources).
 - The drivers in Linux (as of October 2026, and removed ones from its
   history), U-Boot and Zephyr named in [Comparison with known
   controllers](#comparison-with-known-controllers).

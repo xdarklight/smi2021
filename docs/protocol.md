@@ -20,6 +20,9 @@ Statements are marked by how they were established:
   not confirmed on hardware.
 - **Reported**: found by others on real hardware, or in captures of the
   USB traffic of the vendor's Windows driver; see [Sources](#sources).
+- **Windows driver**: read from the code of the vendor's Windows drivers
+  for `smi2021_3c.bin` and `smi2021_3f.bin`, from 2010 and 2011; see
+  [Sources](#sources).
 
 Unmarked statements are observed. Where nothing is known, the document
 says so.
@@ -47,9 +50,10 @@ The device has no non-volatile memory for its firmware:
 ## Microcontroller
 
 The microcontroller executes the AVR instruction set, and its core, I/O
-registers and SRAM, up to 0x0fff, are those of an ATmega103 (inferred). The firmware image is a
-plain AVR program image that starts at address 0 with the interrupt vector
-table. See [`hardware.md`](hardware.md#cpu-core) for details.
+registers and SRAM, up to 0x0fff, are those of an ATmega103 (inferred).
+The firmware image is a plain AVR program image that starts at address 0
+with the interrupt vector table. See [`hardware.md`](hardware.md#cpu-core)
+for details.
 
 ## Data space
 
@@ -62,16 +66,17 @@ of it with [register access requests](#register-access-requests).
 | 0x0020–0x005f | AVR I/O registers, see above |
 | 0x0060–0x0fff | SRAM |
 | 0x1500–0x157f | USB device controller, see [`hardware.md`](hardware.md#usb-device-controller) |
-| 0x1580 | engine of mode 3 |
+| 0x1580–0x15a1 | engine of mode 3, presumably a [transport stream input](#transport-stream-input) |
 | 0x1600 | bit 7 is set when streaming starts in any mode; bits 1–0 control the [IR receiver](#ir-receiver) |
 | 0x1740 | audio engine control, see [Isochronous stream](#isochronous-stream) |
 | 0x1780–0x178f | first i2c engine, see [I2C engines](#i2c-engines) |
 | 0x1800 | video engine control |
 | 0x1880 | stream source; written as 0, 1 or 2 depending on the mode |
 | 0x2000, 0x2040 | buffers of the control endpoint (inferred, from the pointer registers of the [USB device controller](hardware.md#control-endpoint)) |
-| 0x3080 | bit 4 is set on suspend; bit 7 is cleared by the `wValue` 0xfb request and never set by the firmware, so presumably by the hardware (inferred). The Windows driver reads this register during initialization (reported) |
+| 0x3080 | bit 4 is set on suspend, and the Windows driver initializes the device again when it finds it set; bit 2 is pulsed by the Windows driver; bit 7 is cleared by the `wValue` 0xfb request and never set by the firmware, so presumably by the hardware (inferred). See [`hardware.md`](hardware.md#system-control-register-0x3080) |
 | 0x3100 | engine of mode 4, written 0 and 1 |
 | 0x3180–0x318f | second i2c engine |
+| 0x31a5 | read by the Windows driver for `smi2021_3f.bin` to tell boards apart, see [Initialization](#initialization) |
 
 As on any AVR, an I/O register is also visible in the data space at its I/O
 address plus 0x20.
@@ -92,9 +97,20 @@ used by the driver, consists of vendor requests (`bmRequestType` 0x40 or
 1. **Read the state**: IN, `wValue` 0x01, 2 bytes. The second byte is 0x07
    when the bootloader is ready to receive a firmware.
 2. **Upload**: OUT, `wValue` 0x05, 64 bytes each: 0x05, 0xff, then 62 bytes
-   of the image, in order. Images are padded with 0xff to a multiple of 62
-   bytes.
+   of the image, in order. The Windows driver sends the rest of an image
+   that is not a multiple of 62 bytes in a shorter last request, so the
+   bootloader accepts one (Windows driver); padding the image with 0xff
+   works as well.
 3. **Start the firmware**: OUT, `wValue` 0x07, 2 bytes: 0x07, 0x00.
+
+The Windows driver takes any second byte other than 0x07 in the state as a
+running firmware; a firmware replies to the same request with the mode, see
+[IN requests](#in-requests), which is never 0x07 (Windows driver).
+
+The image of `smi2021_3f.bin` is 6620 bytes long, MD5
+`17caca24fdd5833b091b1550c371528b`; the file in this repository has 14
+more bytes, four 0x00 and the start of another copy of the image, as cut
+from the Windows driver. They end up behind the code and do no harm.
 
 All variants use the same USB id while in the bootloader, so the host can't
 tell which firmware a device came with.
@@ -205,14 +221,25 @@ blocks](hardware.md#endpoint-register-blocks).
 
 Mode 5 is video and audio capture from the decoder and the audio ADC. Mode
 2 is audio only, and sends the audio data without chunks, see
-[Isochronous stream](#isochronous-stream). What the engines of modes 3 and 4 do is not
-known. The driver uses mode 3 as standby, which is harmless as it selects
-alternate setting 0 at the same time.
+[Isochronous stream](#isochronous-stream). Mode 3 presumably streams a
+transport stream, see [Transport stream input](#transport-stream-input).
+What the engine of mode 4 does is not known. This driver uses mode 3 as
+standby, which is harmless as it selects alternate setting 0 at the same
+time.
 
 Changing the mode does not stop the engines of the previous one, except for
 the engines that the new mode resets.
 
-The Windows driver uses these sequences (reported):
+The Windows driver uses mode 5 with alternate setting 2 for video, and
+mode 2 with alternate setting 1 for audio only (Windows driver). It starts
+a stream by writing 0x1d to 0x1740, waiting 30 ms, writing 0x00 to 0x1740,
+and queueing 8 transfers of 64 packets of 3072 bytes each; 300 ms later it
+writes 0x0d to 0x1800 and 0x1d to 0x1740. To stop, it writes 0x00 to 0x1740
+and aborts the transfers, without a mode request and without selecting
+alternate setting 0 (Windows driver). It never uses modes 3 and 4, and none
+of the requests `bRequest` 0x91, `bRequest` 0x50 and `wValue` 0xfb.
+
+The captures of the USB traffic show another sequence (reported):
 
 - Video: mode 5, alternate setting 2, then 0x00 to 0x1740 to stop the audio
   data, and after queueing the transfers, 0x0d to 0x1800.
@@ -221,7 +248,9 @@ The Windows driver uses these sequences (reported):
   mode 5 and alternate setting 2 again.
 
 Before the mode request, it writes 0x40 and then twice 0x00 to 0x1740, with
-a pause of 250 ms between the writes.
+a pause of 250 ms between the writes. The Windows drivers that were read
+never write 0x40 to 0x1740, so the captures presumably come from another
+version.
 
 ## Register access requests
 
@@ -301,10 +330,12 @@ Commands in use:
 
 | Command | Transfer | Used by |
 |---------|----------|---------|
-| 0x84 | write the data bytes | the Windows driver, to set the subaddress for 0xa0 (reported) |
-| 0xa0 | read the data bytes | the Windows driver (reported) |
-| 0xc0 | write the subaddress, then the data bytes | this driver, for writes |
-| 0xe0 | write the subaddress, then read the data bytes | this driver, for reads; found by experiment |
+| 0x80 | write the data bytes | the Windows driver, without address bytes (Windows driver) |
+| 0x84 | write the data bytes | the Windows driver, to set the subaddress for 0xa0 (reported, Windows driver) |
+| 0xa0 | read the data bytes | the Windows driver (reported, Windows driver) |
+| 0xc0 | write the subaddress, then the data bytes | this driver, for writes; the Windows driver for writes to the decoder (Windows driver) |
+| 0xc4 | presumably as 0xc0 | the Windows driver knows it, with one address byte; what bit 2 changes is not known (Windows driver) |
+| 0xe0 | write the subaddress, then read the data bytes | this driver, for reads; found by experiment; the Windows driver knows it, but doesn't use it for the decoder (Windows driver) |
 
 The firmware handles these alike apart from bit 5: it loads the subaddress
 register for every command, whether or not the command uses it, and for
@@ -318,7 +349,8 @@ adds the subaddress byte.
 
 The Windows driver reads a register of the decoder by writing the register
 number with 0x84, then reading one byte with 0xa0, with 0x00 instead of the
-register number (reported), which suggests that 0xa0 does not use the
+register number (reported), and waits 10 ms between the two (Windows
+driver), which suggests that 0xa0 does not use the
 subaddress. On an EasyCAP 002 with `smi2021_3c.bin`, about a quarter of
 these reads return the register that an earlier transfer left the
 decoder's subaddress at, without any failure in the reply (observed). So
@@ -416,10 +448,37 @@ The decoder's four analog inputs are wired as follows (reported):
 
 The host's initialization sequence, a series of bridge register writes, is:
 `DDRA` = 0x80, `PORTA` = 0x00, `DDRC` = 0x01, `PORTC` = 0x00, `DDRC` = 0x11,
-`PORTC` = 0x11, `PORTA` = 0x80, `PORTA` = 0x00. What the pins are connected
+`PORTC` = 0x11, `PORTA` = 0x80, `PORTA` = 0x00. The Windows driver waits
+10 ms after `PORTC` = 0x11, 100 ms after `PORTA` = 0x80 and 10 ms after
+the last write, so `PA7` is high for 100 ms (Windows driver). It runs the
+sequence again when it finds bit 4 of 0x3080 set after a suspend, clearing
+that bit and writing 0x00 to 0x1500 first (Windows driver). What the pins
+are connected
 to is not known; the authors of easycap-somagic-linux took `PC0` and `PC4`
 for the reset of the audio ADC and `PA7` for the reset of the decoder
 (reported, unconfirmed).
+
+The Windows driver for `smi2021_3f.bin` tells three boards apart, which
+differ in the setup of the decoder and of a tuner that it also drives, at
+the 8 bit i2c address 0xc0. It reads 0x31a5 and `PINC`, and takes the first
+board if bits 7–6 of 0x31a5 are `10`, or `00` with `PC2` high; otherwise it
+makes `PC2` an input and takes the second board if `PC2` is high, and the
+third if not (Windows driver). So `PC2` is presumably a strap, and 0x31a5
+holds an identification (inferred).
+
+## Transport stream input
+
+The Windows drivers can program 16 PID filters, although they never select
+mode 3 (Windows driver): after pulsing bit 2 of 0x3080 for 10 ms, they
+write each PID, ORed with 0x8000, little endian to 0x1582 + 2 × *n*, and
+read it back until it reads back as written; then they write 0x83 to
+0x1580, or 0xa3 if a flag of the request is set, and read that back, too.
+Without PIDs, they only write 0x83 to 0x1580. Together with the transport
+stream input that Somagic gives for its sibling chips (see [Related
+chips](hardware.md#related-chips)), this makes the engine of mode 3 a
+transport stream input with PID filters, and bit 15 of a filter its enable
+bit (inferred). The mode request of mode 3 writes 0x03 to 0x1580, and
+starting it sets bit 7, which gives the same 0x83.
 
 ## IR receiver
 
@@ -432,7 +491,10 @@ this shape). The decoder runs while bits 1–0 of 0x1600 are `01`.
 decoder, its status, and three bytes of the decoded code. The status is
 0x05 when a complete code was received; reading the buffer through 0x1600
 to 0x1605 sets it to 0x01. Whether any device with this
-firmware has an IR receiver is not known.
+firmware has an IR receiver is not known. The Windows drivers arm it with a
+register write to 0x1600 instead, and read the code as six bytes from
+0x1600, taking bit 2 of the first byte as the mark of a complete code
+(Windows driver).
 
 ## Differences between the images
 
@@ -450,6 +512,16 @@ Compared to `smi2021_3c.bin`, `smi2021_3f.bin`
 Otherwise both images implement the same requests, modes and register
 accesses, and differ only in their descriptors and data layout.
 
+A third image, of 7812 bytes (MD5 `3128c0b8d856c33516f0000ff0565550`), comes
+with a Windows driver from 2013 for an "ezcap Video Grabber", whose INF
+file binds `1c88:1001`, interface 0 (Windows driver). Its device
+descriptor still gives `1c88:003c`; how the device ends up with `1001` is
+not known. Compared to `smi2021_3c.bin`, it adds a second interface, a HID
+boot keyboard with an interrupt endpoint `0x83` on endpoint register
+block C (see [Endpoint register
+blocks](hardware.md#endpoint-register-blocks)), presumably for the remote
+control; it drops the engine of mode 4; and it drives port A low at start.
+
 ## Open questions
 
 See also [Experiments](hardware.md#experiments), which lists tests on
@@ -458,7 +530,7 @@ hardware for these and for the questions about the inside of the bridge.
 - The meaning of the bits of 0x1800, 0x1880 and of the endpoint register
   blocks, beyond the values listed here, and bit 6 of 0x1740.
 - What sets bit 7 of 0x3080, and why the host would clear it.
-- What modes 3 and 4 stream.
+- What mode 4 streams, and the bits of 0x1580 other than 7.
 - The individual bits of the i2c engine commands, beyond bit 5.
 - Which chips the GPIO lines `PA7`, `PC0` and `PC4` are connected to.
 - The bootloader's behaviour beyond the requests listed above.
@@ -471,3 +543,26 @@ reported come from the userspace tools of the easycap-somagic-linux project
 Windows driver and experimented with the hardware:
 <https://github.com/killerkalamari/easycap-somagic-linux>, in particular
 `somagic-capture.c`, `somagic-audio-capture.c` and `somagic-both.c`.
+
+The statements marked as found in the Windows driver come from reading the
+32 bit drivers `SmiUsbGrabber3C.sys` (version 1.0.8.28, January 2011,
+whose firmware is identical to `smi2021_3c.bin`, as is that of the older
+builds from 2010) and `SmiUsbGrabber3F.sys` (version 1.0.6.6, August
+2011, with the 6620 byte image of `smi2021_3f.bin`), and the 2013 driver
+mentioned in [Differences between the images](#differences-between-the-images),
+as found on driver CDs kept by the Internet Archive:
+
+- <https://archive.org/details/EasyCap_DC60_SMI2021>: `SMI2021C Driver
+  v1.0.8.28.zip` and `SMI2021F Driver v1.0.6.6.zip`, the two drivers named
+  above, and a CD image with older builds of the first;
+- <https://archive.org/details/easycap-somalogic-smi-2021-cd-21c>: install
+  CD 2.1C of the EasyCAP DC60, with builds of `SmiUsbGrabber3C.sys` from
+  2010;
+- <https://archive.org/details/easy-cap-2021_202503>: a CD image with a
+  build of `SmiUsbGrabber3F.sys` from October 2011;
+- <https://archive.org/details/easycap>: a collection of EasyCAP drivers,
+  with copies of the drivers above;
+- <https://archive.org/details/autorun_202205>: the driver of 2013 for the
+  "ezcap Video Grabber", with the third image.
+
+No driver with the firmware `smi2021_3e.bin` could be found.
