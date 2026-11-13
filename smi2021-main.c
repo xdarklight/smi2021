@@ -29,7 +29,14 @@
 #define SMI2021_USB_REQUEST		0x01
 #define SMI2021_USB_INDEX		0x00
 
-/* Alternate settings without and with the isochronous endpoint */
+/*
+ * Alternate settings without and with the isochronous endpoint. Both capture
+ * modes use the same one: the stream is framed in chunks of
+ * SMI2021_CHUNK_SIZE bytes, which only fit whole into the packets of
+ * alternate setting 2. The vendor driver picks alternate setting 1 when it
+ * captures audio alone, whose packets are one byte too short for a chunk, and
+ * how it frames the data there is not known.
+ */
 #define SMI2021_ALT_IDLE		0
 #define SMI2021_ALT_STREAM		2
 #define SMI2021_ISOC_PACKETS		10
@@ -419,53 +426,33 @@ static void smi2021_stop_engines(struct smi2021 *smi2021)
 	smi2021_toggle_audio(smi2021, false);
 }
 
-/*
- * A stream is a mode and an alternate setting. Capturing audio alone uses
- * mode 0x02, which does not start the video engine, but the same alternate
- * setting as a video capture: the stream is framed in chunks of
- * SMI2021_CHUNK_SIZE bytes, which only fit whole into the packets of
- * alternate setting 2. The vendor driver picks alternate setting 1 for audio
- * alone, whose packets are one byte too short for a chunk, and how it frames
- * the data there is not known.
- */
-static const struct {
-	u8	mode;
-	u8	alt;
-} smi2021_stream_cfg[] = {
-	[SMI2021_STREAM_OFF]	= { SMI2021_MODE_STANDBY, SMI2021_ALT_IDLE },
-	[SMI2021_STREAM_AUDIO]	= { SMI2021_MODE_AUDIO, SMI2021_ALT_STREAM },
-	[SMI2021_STREAM_VIDEO]	= { SMI2021_MODE_CAPTURE, SMI2021_ALT_STREAM },
-};
-
 static void smi2021_stop_stream(struct smi2021 *smi2021)
 {
-	enum smi2021_stream stream = smi2021->stream;
+	u8 mode = smi2021->stream_mode;
 
 	lockdep_assert_held(&smi2021->stream_lock);
 
-	if (stream == SMI2021_STREAM_OFF)
+	if (mode == SMI2021_MODE_STANDBY)
 		return;
 
 	smi2021_kill_isoc(smi2021);
-	smi2021->stream = SMI2021_STREAM_OFF;
+	smi2021->stream_mode = SMI2021_MODE_STANDBY;
 
 	/* After a disconnect there is nothing left to tell the device */
 	if (smi2021->udev) {
-		if (stream == SMI2021_STREAM_VIDEO)
+		if (mode == SMI2021_MODE_CAPTURE)
 			v4l2_subdev_call(smi2021->decoder, video, s_stream, 0);
 
 		smi2021_stop_engines(smi2021);
-		smi2021_set_mode(smi2021,
-				 smi2021_stream_cfg[SMI2021_STREAM_OFF].mode);
+		smi2021_set_mode(smi2021, SMI2021_MODE_STANDBY);
 		usb_set_interface(smi2021->udev, smi2021->ifnum,
-				  smi2021_stream_cfg[SMI2021_STREAM_OFF].alt);
+				  SMI2021_ALT_IDLE);
 	}
 
 	smi2021_free_isoc(smi2021);
 }
 
-static int smi2021_start_stream(struct smi2021 *smi2021,
-				enum smi2021_stream stream)
+static int smi2021_start_stream(struct smi2021 *smi2021, u8 mode)
 {
 	unsigned int i;
 	int rc;
@@ -476,7 +463,7 @@ static int smi2021_start_stream(struct smi2021 *smi2021,
 	if (rc)
 		return rc;
 
-	if (stream == SMI2021_STREAM_VIDEO) {
+	if (mode == SMI2021_MODE_CAPTURE) {
 		/* The transfers are stopped, so the parser state is ours */
 		smi2021->sequence = 0;
 		smi2021->trc_prefix_len = 0;
@@ -485,17 +472,17 @@ static int smi2021_start_stream(struct smi2021 *smi2021,
 		v4l2_subdev_call(smi2021->decoder, video, s_stream, 1);
 	}
 
-	rc = smi2021_set_mode(smi2021, smi2021_stream_cfg[stream].mode);
+	rc = smi2021_set_mode(smi2021, mode);
 	if (rc)
 		goto err_stop_decoder;
 
 	/* This also makes the firmware start the engines of the mode */
 	rc = usb_set_interface(smi2021->udev, smi2021->ifnum,
-			       smi2021_stream_cfg[stream].alt);
+			       SMI2021_ALT_STREAM);
 	if (rc)
 		goto err_standby;
 
-	smi2021->stream = stream;
+	smi2021->stream_mode = mode;
 
 	/* Only let audio data flow while the pcm device is capturing */
 	smi2021_toggle_audio(smi2021, smi2021->audio_wanted);
@@ -513,9 +500,9 @@ static int smi2021_start_stream(struct smi2021 *smi2021,
 	return 0;
 
 err_standby:
-	smi2021_set_mode(smi2021, smi2021_stream_cfg[SMI2021_STREAM_OFF].mode);
+	smi2021_set_mode(smi2021, SMI2021_MODE_STANDBY);
 err_stop_decoder:
-	if (stream == SMI2021_STREAM_VIDEO)
+	if (mode == SMI2021_MODE_CAPTURE)
 		v4l2_subdev_call(smi2021->decoder, video, s_stream, 0);
 	smi2021_free_isoc(smi2021);
 
@@ -523,30 +510,30 @@ err_stop_decoder:
 }
 
 /*
- * Bring the stream in line with what the video device and the pcm device want.
- * A video capture carries the audio data as well, so audio only needs a stream
- * of its own while no video capture is running.
+ * Bring the stream in line with what the video device and the pcm device
+ * want. The capture mode carries the audio data as well, so audio only needs
+ * a mode of its own while no video capture is running.
  */
 static int smi2021_set_stream(struct smi2021 *smi2021)
 {
-	enum smi2021_stream want = SMI2021_STREAM_OFF;
+	u8 want = SMI2021_MODE_STANDBY;
 
 	lockdep_assert_held(&smi2021->stream_lock);
 
 	/* Nothing can be started once the device is gone */
 	if (smi2021->udev) {
 		if (smi2021->video_wanted)
-			want = SMI2021_STREAM_VIDEO;
+			want = SMI2021_MODE_CAPTURE;
 		else if (smi2021->audio_wanted)
-			want = SMI2021_STREAM_AUDIO;
+			want = SMI2021_MODE_AUDIO;
 	}
 
-	if (want == smi2021->stream) {
+	if (want == smi2021->stream_mode) {
 		/*
 		 * A video capture keeps streaming when the pcm device starts
 		 * or stops, only the audio engine has to follow it.
 		 */
-		if (want != SMI2021_STREAM_OFF)
+		if (want != SMI2021_MODE_STANDBY)
 			smi2021_toggle_audio(smi2021, smi2021->audio_wanted);
 
 		return 0;
@@ -554,7 +541,7 @@ static int smi2021_set_stream(struct smi2021 *smi2021)
 
 	smi2021_stop_stream(smi2021);
 
-	if (want == SMI2021_STREAM_OFF)
+	if (want == SMI2021_MODE_STANDBY)
 		return 0;
 
 	return smi2021_start_stream(smi2021, want);
@@ -682,6 +669,8 @@ static int smi2021_usb_probe(struct usb_interface *intf,
 	smi2021->iso_size = usb_endpoint_max_periodic_payload(udev, ep);
 	/* In microframes, the descriptor holds the exponent plus one */
 	smi2021->iso_interval = 1 << (ep->desc.bInterval - 1);
+	/* The firmware starts in standby, so nothing is streaming yet */
+	smi2021->stream_mode = SMI2021_MODE_STANDBY;
 
 	mutex_init(&smi2021->reg_lock);
 	mutex_init(&smi2021->v4l2_lock);

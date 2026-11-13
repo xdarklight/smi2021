@@ -76,13 +76,6 @@ struct smi2021_board {
 	unsigned int			num_inputs;
 };
 
-/* What the device is streaming, which selects the mode it is put into */
-enum smi2021_stream {
-	SMI2021_STREAM_OFF,
-	SMI2021_STREAM_AUDIO,
-	SMI2021_STREAM_VIDEO,
-};
-
 struct smi2021 {
 	struct device			*dev;
 	struct usb_device		*udev;
@@ -111,7 +104,8 @@ struct smi2021 {
 	 * by the videobuf2 callbacks and by the pcm trigger work.
 	 */
 	struct mutex			stream_lock;
-	enum smi2021_stream		stream;
+	/* Mode of the running stream, standby while nothing is streaming */
+	u8				stream_mode;
 	/* Whether the video device and the pcm device want data */
 	bool				video_wanted;
 	bool				audio_wanted;
