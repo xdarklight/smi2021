@@ -18,6 +18,8 @@ Statements are marked by how they were established:
 - **Observed**: read directly from what the firmware does.
 - **Inferred**: the most plausible interpretation of observed behaviour,
   not confirmed on hardware.
+- **Reported**: found by others on real hardware, or in captures of the
+  USB traffic of the vendor's Windows driver; see [Sources](#sources).
 
 Unmarked statements are observed. Where nothing is known, the document
 says so.
@@ -74,12 +76,12 @@ of it with [register access requests](#register-access-requests).
 | 0x0060–0x0fff | SRAM |
 | 0x1500–0x15ff | USB device controller, see below |
 | 0x1600 | bit 7 is set when streaming starts in any mode; in `smi2021_3c.bin`, bits 1–0 also control the [IR receiver](#ir-receiver) |
-| 0x1740 | audio engine control |
+| 0x1740 | audio engine control, see [Isochronous stream](#isochronous-stream) |
 | 0x1780–0x178f | first i2c engine, see [I2C engines](#i2c-engines) |
 | 0x1800 | video engine control |
 | 0x1880 | stream source; written as 0, 1 or 2 depending on the mode |
 | 0x2000, 0x2040 | buffers of the control endpoint (inferred, from the pointer registers below) |
-| 0x3080 | power control (inferred): bit 4 is set on suspend, bit 7 is cleared on a vendor request |
+| 0x3080 | bit 4 is set on suspend; bit 7 is cleared by the `wValue` 0xfb request and never set by the firmware, so presumably by the hardware (inferred). The Windows driver reads this register during initialization (reported) |
 | 0x3100 | engine of mode 4, written 0 and 1 |
 | 0x3180–0x318f | second i2c engine |
 
@@ -199,7 +201,7 @@ the first data byte instead. The driver sets `wValue` to that byte, too.
 | 0x0b | 13 | reply to a register read, with up to 8 bytes of data |
 | 0x0c | 21 | the same with up to 16 bytes of data |
 | 0x0d | 37 | the same with up to 32 bytes of data |
-| 0xfb | 2 | 0xfb, 0x01; clears bit 7 of 0x3080 (purpose unknown) |
+| 0xfb | 2 | 0xfb, 0x01; clears bit 7 of 0x3080, which the host could also do with a register write (purpose unknown) |
 
 Any other `wValue` is stalled. `bRequest` 0x91 is the exception, see
 [IR receiver](#ir-receiver).
@@ -225,6 +227,17 @@ alternate setting 0 at the same time.
 
 Changing the mode does not stop the engines of the previous one, except for
 the engines that the new mode resets.
+
+The Windows driver uses these sequences (reported):
+
+- Video: mode 5, alternate setting 2, then 0x00 to 0x1740 to stop the audio
+  data, and after queueing the transfers, 0x0d to 0x1800.
+- Audio only: mode 2, alternate setting 1, then 0x1d to 0x1740.
+- Video and audio: mode 2 and alternate setting 2, then, while streaming,
+  mode 5 and alternate setting 2 again.
+
+Before the mode request, it writes 0x40 and then twice 0x00 to 0x1740, with
+a pause of 250 ms between the writes.
 
 ## Register access requests
 
@@ -308,9 +321,14 @@ firmware's checks above suggest that bit 7 starts a transfer and that bit 6
 adds the subaddress byte.
 
 To read a register of the decoder, the driver first writes the register
-number with 0x84, then reads one byte with 0xa0. Whether 0xa0 alone, with
-the register number as the subaddress, performs the combined write and read
-of the SAA7113H datasheet is not known.
+number with 0x84, then reads one byte with 0xa0. The Windows driver does the
+same, but sends 0x00 instead of the register number with 0xa0 (reported),
+which suggests that 0xa0 does not use the subaddress. Bit 2, only set in
+0x84, may keep the bus for a repeated start, which would make the pair the
+combined write and read of the SAA7113H datasheet (inferred).
+
+The firmware completes a transfer, including its retries, before it
+acknowledges the request, so the host needs no delays between requests.
 
 ## Isochronous stream
 
@@ -340,9 +358,18 @@ alternating between two channels, at 48 kHz. Frames may be split across
 chunks. This format comes from the host side; the firmware doesn't
 configure it.
 
-The driver writes 0x1d to 0x1740 to start the transfer of audio data and
-0x00 to stop it, as the vendor driver does. As the firmware itself only
-sets 0x05, bits 3 and 4 presumably enable the transfer over USB (inferred).
+The audio engine is controlled by 0x1740 (reported, from experiments):
+
+| Bit | Effect |
+|-----|--------|
+| 0, 2 | must both be set for audio data to be sent |
+| 1 | swaps the left and the right channel |
+| 3, 4 | with both set, the samples are aligned as described above; otherwise the data starts 2 bytes into a sample |
+| 6 | written as 0x40 and then 0 by the Windows driver during initialization; effect unknown |
+
+As the firmware sets 0x05 when streaming starts in modes 2 and 5, audio
+chunks are sent unless the host clears 0x1740. The driver writes 0x1d to
+start audio and 0x00 to stop it.
 
 ## GPIO and board signals
 
@@ -354,11 +381,26 @@ sets 0x05, bits 3 and 4 presumably enable the transfer over USB (inferred).
 | `PC4` | driven high by the host during initialization |
 | `PC5` | IR receiver input (`smi2021_3c.bin` only) |
 
+### Inputs
+
+The decoder's four analog inputs are wired as follows (reported):
+
+| Decoder mode | Pins | EasyCAP 002 | EasyCAP DC60 |
+|--------------|------|-------------|--------------|
+| 0 | AI11 | VIDEO 3 | composite |
+| 1 | AI12 | VIDEO 4 | |
+| 2 | AI21 | VIDEO 1 | |
+| 3 | AI22 | VIDEO 2 | |
+| 7 | Y on AI12, C on AI22 | | S-Video |
+
+### Initialization
+
 The host's initialization sequence, a series of bridge register writes, is:
 `DDRA` = 0x80, `PORTA` = 0x00, `DDRC` = 0x01, `PORTC` = 0x00, `DDRC` = 0x11,
 `PORTC` = 0x11, `PORTA` = 0x80, `PORTA` = 0x00. What the pins are connected
-to is not known; presumably they are the reset inputs of the decoder and of
-the audio ADC.
+to is not known; the authors of easycap-somagic-linux took `PC0` and `PC4`
+for the reset of the audio ADC and `PA7` for the reset of the decoder
+(reported, unconfirmed).
 
 ## IR receiver
 
@@ -382,10 +424,19 @@ descriptors and data layout.
 
 ## Open questions
 
-- The meaning of the bits of 0x1740, 0x1800, 0x1880 and of the endpoint
-  register blocks, beyond the values listed here.
+- The meaning of the bits of 0x1800, 0x1880 and of the endpoint register
+  blocks, beyond the values listed here, and bit 6 of 0x1740.
+- What sets bit 7 of 0x3080, and why the host would clear it.
 - What modes 3 and 4 stream.
-- The individual bits of the i2c engine commands.
-- What the vendor request with `wValue` 0xfb is for.
+- The individual bits of the i2c engine commands, beyond bit 5.
 - Which chips the GPIO lines `PA7`, `PC0` and `PC4` are connected to.
 - The bootloader's behaviour beyond the requests listed above.
+
+## Sources
+
+Besides the firmware images and the datasheets, the statements marked as
+reported come from the userspace tools of the easycap-somagic-linux project
+(GPL-2.0-or-later), whose authors captured the USB traffic of the vendor's
+Windows driver and experimented with the hardware:
+<https://github.com/killerkalamari/easycap-somagic-linux>, in particular
+`somagic-capture.c`, `somagic-audio-capture.c` and `somagic-both.c`.
