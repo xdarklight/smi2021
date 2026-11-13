@@ -163,8 +163,13 @@ saw only 0x002c taken, about once per USB event during an enumeration
 their sources may just never have been enabled. With interrupts enabled,
 the test firmware stopped working within a few control transfers, even
 with a handler that only read the event registers and counted, while the
-same firmware polling the controller worked (observed). Why is not known.
-The original firmware enables interrupts but polls too, see
+same firmware polling the controller worked (observed). With a handler
+that touched no register of the controller, only SRAM, or with a bare
+`RETI`, it did not even get through an enumeration (observed). So the
+interrupt presumably stays requested until the handler reads an event
+register, 0x1503 or 0x1502, and a handler that doesn't starves the main
+loop (inferred). Why a handler that does read them still fails is not
+known. The original firmware enables interrupts but polls too, see
 [Interrupt](#interrupt).
 
 After the vector table, both images place the initial values of their
@@ -362,7 +367,7 @@ for the main loop and returns:
 
 | Code | Event | What the firmware does |
 |------|-------|-------------------------|
-| 0x01, with 0x1502 bit 4 set | setup packet | clears 0x1502 bit 4, withdraws a pending packet of the control endpoint by clearing 0x151c bit 7, and has the main loop handle the request |
+| 0x01, with 0x1502 bit 4 set | setup packet | clears 0x1502 bit 4, withdraws a pending packet of the control endpoint by clearing 0x151c bit 7, and has the main loop handle the request; from the first register access request on (not the info query) until the next bus reset, the handler leaves the pending packet alone, and the main loop withdraws it instead, after it has copied the setup packet |
 | 0x80 | speed detected | sets the maximum packet size of endpoint blocks A and B to 0x0400 if 0x1501 bit 1 is set, otherwise to 0x03ff |
 | 0x81 | bus reset | resets its own state only: device state default, control endpoint idle, endpoints halted in its bookkeeping |
 | 0x85 | suspend | drives `PC0` low (and makes `PC2` an output in `3f`), sets bit 4 of 0x3080 and bit 2 of 0x1500 |
