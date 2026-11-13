@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# Userspace harness for the smi2021 frame parser. The parser is extracted
+# verbatim from the driver source so that the tested code is the shipped code.
+
+DRIVER_SRC := ../../smi2021_main.c
+
+.PHONY: check clean
+check: test
+	./test
+
+test: test.c parser_extract.h
+	$(CC) -O2 -Wall -Wextra -Wno-unused-parameter -o $@ test.c
+
+parser_extract.h: $(DRIVER_SRC)
+	awk '/^static bool is_sav\(u8 trc\)/,/^ \* The device delivers data in chunks/' \
+		$< | head -n -3 > $@
+
+clean:
+	rm -f test parser_extract.h
