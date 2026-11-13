@@ -236,7 +236,8 @@ gets for free, rather than by capturing fewer lines.
 ### No frames from a 60 Hz signal while a 50 Hz standard is set
 
 With a 625 line standard set and a 525 line signal on the input, the decoder
-keeps the field bit of every timing reference code at 0. It still sends
+may never lock to the signal, and then keeps the field bit of every timing
+reference code at 0. It still sends
 vertical blanking for every field, but the driver starts a frame where the
 second field ends, F going from 1 to 0, and that never happens. No buffer is
 handed back at all: streaming waits for the first frame and `read()` blocks,
@@ -244,6 +245,13 @@ which also holds up the read/write test of `v4l2-compliance -s`. The other
 way round, a 625 line signal while a 525 line standard is set, frames arrive
 as usual, and so they do from an input without a signal, where the decoder
 runs free and keeps toggling the field bit.
+
+Whether it locks depends on how the decoder got there. Set to a 625 line
+standard right after the driver loaded, it reported no signal and sent no
+frame. Switched to one while it was locked to the 525 line signal, it stayed
+locked, reported a signal, and the frames kept coming, 5 s later as well;
+step 9 of `tools/hw-test/run-tests.sh` does that. Both were seen with
+`smi2021_3c.bin` and with `smi2021_3f.bin`, so it is the decoder's doing.
 
 `VIDIOC_QUERYSTD` does not help here: with a 625 line standard set, the
 decoder runs at 50 Hz, reports that it is not locked to the 60 Hz signal, and
