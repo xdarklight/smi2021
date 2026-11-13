@@ -6,6 +6,8 @@
  * extracted verbatim from smi2021-main.c into parser_extract.h. This file
  * provides the few kernel interfaces it uses, and synthetic ITU-R BT.656
  * streams to feed it.
+ *
+ * Copyright (C) 2026 Martin Blumenstingl <martin.blumenstingl@googlemail.com>
  */
 #include <stdbool.h>
 #include <stddef.h>

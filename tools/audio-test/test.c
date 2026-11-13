@@ -5,6 +5,8 @@
  * smi2021_pcm_advance() and smi2021_audio_copy() are extracted verbatim from
  * smi2021-audio.c into audio_extract.h. This file provides the few kernel
  * interfaces they use, and synthetic audio chunks to feed them.
+ *
+ * Copyright (C) 2026 Martin Blumenstingl <martin.blumenstingl@googlemail.com>
  */
 #include <stdbool.h>
 #include <stdint.h>

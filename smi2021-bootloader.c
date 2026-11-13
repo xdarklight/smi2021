@@ -6,6 +6,7 @@
  *
  * Copyright (C) 2011-2013 Jon Arne Jørgensen <jonjon.arnearne@gmail.com>
  * Copyright (C) 2011, 2012 Tony Brown, Michal Demin, Jeffry Johnston
+ * Copyright (C) 2026 Martin Blumenstingl <martin.blumenstingl@googlemail.com>
  */
 
 #include <linux/firmware.h>

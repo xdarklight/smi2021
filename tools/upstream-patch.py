@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
+# Copyright (C) 2026 Martin Blumenstingl <martin.blumenstingl@googlemail.com>
 """
 Turn this repository into the single patch that adds the driver to a Linux
 tree, ready to be sent with git send-email.
