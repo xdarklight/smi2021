@@ -110,6 +110,12 @@ static void vb2_buffer_done(struct vb2_buffer *vb, enum vb2_buffer_state state)
 		frames_error++;
 }
 
+/* Comes from the format code, which is not extracted */
+static unsigned int smi2021_field(const struct smi2021 *smi2021)
+{
+	return V4L2_FIELD_INTERLACED;
+}
+
 #include "parser_extract.h"
 
 /* --- synthetic stream generation --------------------------------------- */

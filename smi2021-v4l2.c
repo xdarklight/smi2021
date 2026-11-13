@@ -189,6 +189,18 @@ static int smi2021_enum_fmt_vid_cap(struct file *file, void *priv,
 	return 0;
 }
 
+/*
+ * A frame starts with the field flagged as the first one in the timing
+ * reference codes, and that field goes to the even lines: the top field is
+ * the older one with either standard. V4L2_FIELD_INTERLACED says that the
+ * bottom field is the older one in M/NTSC, so be explicit with 525 lines.
+ */
+static enum v4l2_field smi2021_field(const struct smi2021 *smi2021)
+{
+	return smi2021->cur_norm & V4L2_STD_525_60 ? V4L2_FIELD_INTERLACED_TB :
+						     V4L2_FIELD_INTERLACED;
+}
+
 /* The format is fixed, so this implements G_FMT, TRY_FMT and S_FMT */
 static int smi2021_fmt_vid_cap(struct file *file, void *priv,
 			       struct v4l2_format *f)
@@ -198,7 +210,7 @@ static int smi2021_fmt_vid_cap(struct file *file, void *priv,
 	f->fmt.pix.width = SMI2021_WIDTH;
 	f->fmt.pix.height = smi2021->cur_height;
 	f->fmt.pix.pixelformat = V4L2_PIX_FMT_UYVY;
-	f->fmt.pix.field = V4L2_FIELD_INTERLACED;
+	f->fmt.pix.field = smi2021_field(smi2021);
 	f->fmt.pix.bytesperline = SMI2021_BYTES_PER_LINE;
 	f->fmt.pix.sizeimage = SMI2021_BYTES_PER_LINE * smi2021->cur_height;
 	f->fmt.pix.colorspace = V4L2_COLORSPACE_SMPTE170M;
@@ -363,7 +375,7 @@ static void smi2021_buf_done(struct smi2021 *smi2021)
 
 	buf->vb.vb2_buf.timestamp = ktime_get_ns();
 	buf->vb.sequence = smi2021->sequence++;
-	buf->vb.field = V4L2_FIELD_INTERLACED;
+	buf->vb.field = smi2021_field(smi2021);
 	vb2_set_plane_payload(&buf->vb.vb2_buf, 0,
 			      SMI2021_BYTES_PER_LINE * smi2021->cur_height);
 	vb2_buffer_done(&buf->vb.vb2_buf,
