@@ -10,6 +10,8 @@
  * Copyright (C) 2012 Ezequiel Garcia <elezegarcia@gmail.com>
  */
 
+#include <linux/device.h>
+#include <linux/err.h>
 #include <linux/math.h>
 #include <linux/sizes.h>
 
@@ -85,15 +87,29 @@ static int smi2021_pcm_prepare(struct snd_pcm_substream *substream)
 	return 0;
 }
 
+/*
+ * Starting the stream takes several control requests, so the trigger callback
+ * defers it here. If it fails there is no way to report that to the pcm device
+ * other than stopping the stream, which beats letting it wait for data that is
+ * never going to arrive.
+ */
 static void smi2021_pcm_trigger_work(struct work_struct *work)
 {
 	struct smi2021 *smi2021 = container_of(work, struct smi2021,
 					       pcm_trigger_work);
+	struct snd_pcm_substream *substream = smi2021->pcm_substream;
+	bool capturing = atomic_read(&smi2021->pcm_capturing);
+	int rc;
 
-	smi2021_toggle_audio(smi2021, atomic_read(&smi2021->pcm_capturing));
+	rc = smi2021_request_audio(smi2021, capturing);
+	if (rc && capturing && substream) {
+		dev_err(smi2021->dev, "cannot start the audio stream: %pe\n",
+			ERR_PTR(rc));
+		snd_pcm_stop_xrun(substream);
+	}
 }
 
-/* Called with the stream lock held, so this must not sleep */
+/* Called with the pcm stream lock held, so this must not sleep */
 static int smi2021_pcm_trigger(struct snd_pcm_substream *substream, int cmd)
 {
 	struct smi2021 *smi2021 = snd_pcm_substream_chip(substream);
@@ -144,7 +160,7 @@ static void smi2021_pcm_advance(struct smi2021 *smi2021,
 }
 
 /*
- * Copy the audio data of one chunk into the ring buffer. Called with the
+ * Copy the audio data of one chunk into the ring buffer. Called with the pcm
  * stream lock held. Returns whether a period has elapsed.
  *
  * When bytes got lost, mark the partial frame at the head of the ring buffer
@@ -216,7 +232,7 @@ void smi2021_audio(struct smi2021 *smi2021, const u8 *data, unsigned int len)
 
 	/*
 	 * pcm_capturing only changes in the trigger callback, which runs with
-	 * the stream lock held, so the runtime is valid while it is set.
+	 * the pcm stream lock held, so the runtime is valid while it is set.
 	 */
 	guard(pcm_stream_lock_irqsave)(substream);
 

@@ -75,6 +75,13 @@ struct smi2021_board {
 	unsigned int			num_inputs;
 };
 
+/* What the device is streaming, which selects the mode it is put into */
+enum smi2021_stream {
+	SMI2021_STREAM_OFF,
+	SMI2021_STREAM_AUDIO,
+	SMI2021_STREAM_VIDEO,
+};
+
 struct smi2021 {
 	struct device			*dev;
 	struct usb_device		*udev;
@@ -95,8 +102,18 @@ struct smi2021 {
 
 	/* Protects the v4l2 ioctls */
 	struct mutex			v4l2_lock;
-	/* Protects the videobuf2 queue and the isochronous transfers */
+	/* Protects the videobuf2 queue */
 	struct mutex			vb_queue_lock;
+
+	/*
+	 * Protects the stream state below and the isochronous transfers. Held
+	 * by the videobuf2 callbacks and by the pcm trigger work.
+	 */
+	struct mutex			stream_lock;
+	enum smi2021_stream		stream;
+	/* Whether the video device and the pcm device want data */
+	bool				video_wanted;
+	bool				audio_wanted;
 
 	u8				ifnum;
 	u8				iso_ep;
@@ -128,7 +145,12 @@ struct smi2021 {
 	unsigned int			pcm_write_ptr;
 	unsigned int			pcm_period_bytes;
 	u8				pcm_read_offset;
-	/* Only changed by the trigger callback, under the stream lock */
+	/*
+	 * Whether the completion handler may write into the ring buffer.
+	 * Changed by the trigger callback, under the pcm stream lock that
+	 * smi2021_audio() holds as well; atomic only for the lockless read
+	 * in the trigger work.
+	 */
 	atomic_t			pcm_capturing;
 	struct work_struct		pcm_trigger_work;
 };
@@ -141,7 +163,7 @@ int smi2021_ctrl_write(struct usb_device *udev, u16 value, const void *data,
 		       u16 size);
 int smi2021_ctrl_read(struct usb_device *udev, u16 value, void *data,
 		      u16 size);
-void smi2021_toggle_audio(struct smi2021 *smi2021, bool enable);
+int smi2021_request_audio(struct smi2021 *smi2021, bool enable);
 int smi2021_start_streaming(struct vb2_queue *vq, unsigned int count);
 void smi2021_stop_streaming(struct vb2_queue *vq);
 

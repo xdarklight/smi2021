@@ -38,9 +38,10 @@
 #define SMI2021_ISOC_PACKETS		10
 
 /*
- * Modes set with a hardware state request. The firmware starts in standby, and
- * also knows the modes 0x02 and 0x04, whose purpose is unknown.
+ * Modes set with a hardware state request. The firmware starts in standby and
+ * also knows the mode 0x04, whose purpose is unknown.
  */
+#define SMI2021_MODE_AUDIO		0x02
 #define SMI2021_MODE_STANDBY		0x03
 #define SMI2021_MODE_CAPTURE		0x05
 
@@ -578,7 +579,7 @@ err_free:
 	return -ENOMEM;
 }
 
-void smi2021_toggle_audio(struct smi2021 *smi2021, bool enable)
+static void smi2021_toggle_audio(struct smi2021 *smi2021, bool enable)
 {
 	smi2021_write_reg(smi2021, SMI2021_REG_AUDIO_CTRL,
 			  enable ? SMI2021_REG_AUDIO_CTRL_ON :
@@ -586,7 +587,7 @@ void smi2021_toggle_audio(struct smi2021 *smi2021, bool enable)
 }
 
 /*
- * Neither the standby mode nor alternate setting 0 stops the engines that the
+ * Neither the standby mode nor alternate setting 0 stops the engines that a
  * capture mode started, so clear their control registers the way the firmware
  * does when it enters the mode.
  */
@@ -597,57 +598,176 @@ static void smi2021_stop_engines(struct smi2021 *smi2021)
 	smi2021_toggle_audio(smi2021, false);
 }
 
-int smi2021_start_streaming(struct vb2_queue *vq, unsigned int count)
+/*
+ * A stream is a mode and an alternate setting. Capturing audio alone uses
+ * mode 0x02, which does not start the video engine, but the same alternate
+ * setting as a video capture: the stream is framed in chunks of
+ * SMI2021_CHUNK_SIZE bytes, which only fit whole into the packets of
+ * alternate setting 2. The vendor driver picks alternate setting 1 for audio
+ * alone, whose packets are one byte too short for a chunk, and how it frames
+ * the data there is not known.
+ */
+static const struct {
+	u8	mode;
+	u8	alt;
+} smi2021_stream_cfg[] = {
+	[SMI2021_STREAM_OFF]	= { SMI2021_MODE_STANDBY, SMI2021_ALT_IDLE },
+	[SMI2021_STREAM_AUDIO]	= { SMI2021_MODE_AUDIO, SMI2021_ALT_STREAM },
+	[SMI2021_STREAM_VIDEO]	= { SMI2021_MODE_CAPTURE, SMI2021_ALT_STREAM },
+};
+
+static void smi2021_stop_stream(struct smi2021 *smi2021)
 {
-	struct smi2021 *smi2021 = vb2_get_drv_priv(vq);
+	enum smi2021_stream stream = smi2021->stream;
+
+	lockdep_assert_held(&smi2021->stream_lock);
+
+	if (stream == SMI2021_STREAM_OFF)
+		return;
+
+	smi2021_kill_isoc(smi2021);
+	smi2021->stream = SMI2021_STREAM_OFF;
+
+	/* After a disconnect there is nothing left to tell the device */
+	if (smi2021->udev) {
+		if (stream == SMI2021_STREAM_VIDEO)
+			v4l2_subdev_call(smi2021->decoder, video, s_stream, 0);
+
+		smi2021_stop_engines(smi2021);
+		smi2021_set_mode(smi2021,
+				 smi2021_stream_cfg[SMI2021_STREAM_OFF].mode);
+		usb_set_interface(smi2021->udev, smi2021->ifnum,
+				  smi2021_stream_cfg[SMI2021_STREAM_OFF].alt);
+	}
+
+	smi2021_free_isoc(smi2021);
+}
+
+static int smi2021_start_stream(struct smi2021 *smi2021,
+				enum smi2021_stream stream)
+{
 	unsigned int i;
 	int rc;
 
-	smi2021->sequence = 0;
-	smi2021->trc_prefix_len = 0;
-	smi2021->last_field2 = false;
+	lockdep_assert_held(&smi2021->stream_lock);
 
 	rc = smi2021_alloc_isoc(smi2021);
 	if (rc)
-		goto err_clear_queue;
+		return rc;
 
-	v4l2_subdev_call(smi2021->decoder, video, s_stream, 1);
+	if (stream == SMI2021_STREAM_VIDEO) {
+		/* The transfers are stopped, so the parser state is ours */
+		smi2021->sequence = 0;
+		smi2021->trc_prefix_len = 0;
+		smi2021->last_field2 = false;
 
-	rc = smi2021_set_mode(smi2021, SMI2021_MODE_CAPTURE);
+		v4l2_subdev_call(smi2021->decoder, video, s_stream, 1);
+	}
+
+	rc = smi2021_set_mode(smi2021, smi2021_stream_cfg[stream].mode);
 	if (rc)
 		goto err_stop_decoder;
 
-	/* In capture mode this also makes the firmware start the video engine */
+	/* This also makes the firmware start the engines of the mode */
 	rc = usb_set_interface(smi2021->udev, smi2021->ifnum,
-			       SMI2021_ALT_STREAM);
+			       smi2021_stream_cfg[stream].alt);
 	if (rc)
 		goto err_standby;
 
-	/* Only let audio data flow while the PCM device is capturing */
-	smi2021_toggle_audio(smi2021, atomic_read(&smi2021->pcm_capturing));
+	smi2021->stream = stream;
+
+	/* Only let audio data flow while the pcm device is capturing */
+	smi2021_toggle_audio(smi2021, smi2021->audio_wanted);
 
 	for (i = 0; i < smi2021->num_urbs; i++) {
 		rc = usb_submit_urb(smi2021->urbs[i], GFP_KERNEL);
 		if (rc) {
 			dev_err(smi2021->dev, "cannot submit urb %u: %d\n",
 				i, rc);
-			goto err_kill_urbs;
+			smi2021_stop_stream(smi2021);
+			return rc;
 		}
 	}
 
 	return 0;
 
-err_kill_urbs:
-	smi2021_kill_isoc(smi2021);
-	smi2021_stop_engines(smi2021);
-	usb_set_interface(smi2021->udev, smi2021->ifnum, SMI2021_ALT_IDLE);
 err_standby:
-	smi2021_set_mode(smi2021, SMI2021_MODE_STANDBY);
+	smi2021_set_mode(smi2021, smi2021_stream_cfg[SMI2021_STREAM_OFF].mode);
 err_stop_decoder:
-	v4l2_subdev_call(smi2021->decoder, video, s_stream, 0);
+	if (stream == SMI2021_STREAM_VIDEO)
+		v4l2_subdev_call(smi2021->decoder, video, s_stream, 0);
 	smi2021_free_isoc(smi2021);
-err_clear_queue:
-	smi2021_clear_queue(smi2021, VB2_BUF_STATE_QUEUED);
+
+	return rc;
+}
+
+/*
+ * Bring the stream in line with what the video device and the pcm device want.
+ * A video capture carries the audio data as well, so audio only needs a stream
+ * of its own while no video capture is running.
+ */
+static int smi2021_set_stream(struct smi2021 *smi2021)
+{
+	enum smi2021_stream want = SMI2021_STREAM_OFF;
+
+	lockdep_assert_held(&smi2021->stream_lock);
+
+	/* Nothing can be started once the device is gone */
+	if (smi2021->udev) {
+		if (smi2021->video_wanted)
+			want = SMI2021_STREAM_VIDEO;
+		else if (smi2021->audio_wanted)
+			want = SMI2021_STREAM_AUDIO;
+	}
+
+	if (want == smi2021->stream) {
+		/*
+		 * A video capture keeps streaming when the pcm device starts
+		 * or stops, only the audio engine has to follow it.
+		 */
+		if (want != SMI2021_STREAM_OFF)
+			smi2021_toggle_audio(smi2021, smi2021->audio_wanted);
+
+		return 0;
+	}
+
+	smi2021_stop_stream(smi2021);
+
+	if (want == SMI2021_STREAM_OFF)
+		return 0;
+
+	return smi2021_start_stream(smi2021, want);
+}
+
+/* Start or stop the transfer of audio data, see smi2021_set_stream() */
+int smi2021_request_audio(struct smi2021 *smi2021, bool enable)
+{
+	guard(mutex)(&smi2021->stream_lock);
+
+	smi2021->audio_wanted = enable;
+
+	return smi2021_set_stream(smi2021);
+}
+
+int smi2021_start_streaming(struct vb2_queue *vq, unsigned int count)
+{
+	struct smi2021 *smi2021 = vb2_get_drv_priv(vq);
+	int rc;
+
+	guard(mutex)(&smi2021->stream_lock);
+
+	smi2021->video_wanted = true;
+
+	rc = smi2021_set_stream(smi2021);
+	if (rc) {
+		smi2021->video_wanted = false;
+
+		/* The transfers are stopped, so the buffers are ours again */
+		smi2021_clear_queue(smi2021, VB2_BUF_STATE_QUEUED);
+
+		/* Go back to streaming audio alone, if the pcm device wants it */
+		smi2021_set_stream(smi2021);
+	}
 
 	return rc;
 }
@@ -656,19 +776,19 @@ void smi2021_stop_streaming(struct vb2_queue *vq)
 {
 	struct smi2021 *smi2021 = vb2_get_drv_priv(vq);
 
-	smi2021_kill_isoc(smi2021);
+	guard(mutex)(&smi2021->stream_lock);
 
-	/* After a disconnect, this is called when the last user goes away */
-	if (smi2021->udev) {
-		v4l2_subdev_call(smi2021->decoder, video, s_stream, 0);
-		smi2021_stop_engines(smi2021);
-		smi2021_set_mode(smi2021, SMI2021_MODE_STANDBY);
-		usb_set_interface(smi2021->udev, smi2021->ifnum,
-				  SMI2021_ALT_IDLE);
-	}
+	smi2021->video_wanted = false;
 
-	smi2021_free_isoc(smi2021);
+	/*
+	 * Stop the transfers before handing the buffers back: the completion
+	 * handler owns the current one while they are running.
+	 */
+	smi2021_stop_stream(smi2021);
 	smi2021_clear_queue(smi2021, VB2_BUF_STATE_ERROR);
+
+	/* Keep the audio data flowing if the pcm device is capturing */
+	smi2021_set_stream(smi2021);
 }
 
 /* Allocates the device numbers */
@@ -689,6 +809,7 @@ static void smi2021_release(struct v4l2_device *v4l2_dev)
 	mutex_destroy(&smi2021->reg_lock);
 	mutex_destroy(&smi2021->v4l2_lock);
 	mutex_destroy(&smi2021->vb_queue_lock);
+	mutex_destroy(&smi2021->stream_lock);
 
 	ida_free(&smi2021_ida, smi2021->nr);
 	kfree(smi2021);
@@ -840,6 +961,7 @@ static int smi2021_usb_probe(struct usb_interface *intf,
 	mutex_init(&smi2021->reg_lock);
 	mutex_init(&smi2021->v4l2_lock);
 	mutex_init(&smi2021->vb_queue_lock);
+	mutex_init(&smi2021->stream_lock);
 	spin_lock_init(&smi2021->buf_lock);
 	INIT_LIST_HEAD(&smi2021->avail_bufs);
 
@@ -932,6 +1054,7 @@ err_free:
 	mutex_destroy(&smi2021->reg_lock);
 	mutex_destroy(&smi2021->v4l2_lock);
 	mutex_destroy(&smi2021->vb_queue_lock);
+	mutex_destroy(&smi2021->stream_lock);
 	ida_free(&smi2021_ida, smi2021->nr);
 	kfree(smi2021);
 
@@ -953,16 +1076,32 @@ static void smi2021_usb_disconnect(struct usb_interface *intf)
 	mutex_lock(&smi2021->vb_queue_lock);
 	mutex_lock(&smi2021->v4l2_lock);
 
-	smi2021_kill_isoc(smi2021);
-	smi2021_clear_queue(smi2021, VB2_BUF_STATE_ERROR);
+	scoped_guard(mutex, &smi2021->stream_lock) {
+		smi2021_kill_isoc(smi2021);
+		smi2021_clear_queue(smi2021, VB2_BUF_STATE_ERROR);
+	}
+
 	video_unregister_device(&smi2021->vdev);
 	v4l2_device_disconnect(&smi2021->v4l2_dev);
 
-	/* No URB is running anymore, so no audio data can arrive either */
+	/*
+	 * This stops a stream that the pcm device started and makes sure that
+	 * its trigger work can not start another one.
+	 */
 	smi2021_snd_unregister(smi2021);
 
-	/* Tell smi2021_stop_streaming() that the device is gone */
-	smi2021->udev = NULL;
+	scoped_guard(mutex, &smi2021->stream_lock) {
+		/* Tell smi2021_set_stream() that the device is gone */
+		smi2021->udev = NULL;
+		smi2021->video_wanted = false;
+		smi2021->audio_wanted = false;
+
+		/*
+		 * smi2021_stop_streaming() only runs if a video capture was
+		 * running, so free what is left here.
+		 */
+		smi2021_stop_stream(smi2021);
+	}
 
 	mutex_unlock(&smi2021->v4l2_lock);
 	mutex_unlock(&smi2021->vb_queue_lock);

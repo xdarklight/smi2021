@@ -14,7 +14,9 @@ input, and the EasyCAP 002, with four composite inputs. Video is decoded by a
 Philips SAA7113 or its GM7113C clone, both handled by the in-tree `saa7115`
 driver. Audio is captured by a Cirrus Logic CS5340 and arrives interleaved
 with the video on the same isochronous endpoint, so it is exposed as an ALSA
-PCM capture device by this driver rather than by `snd-usb-audio`.
+PCM capture device by this driver rather than by `snd-usb-audio`. The PCM
+device also works on its own: with no video capture running the driver puts
+the device into its audio only mode, which leaves the video engine stopped.
 
 | USB ID                  | State                                          |
 |-------------------------|------------------------------------------------|

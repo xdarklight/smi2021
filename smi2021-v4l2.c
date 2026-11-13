@@ -247,7 +247,7 @@ static const struct vb2_ops smi2021_video_qops = {
 	.stop_streaming		= smi2021_stop_streaming,
 };
 
-/* Must be called with vb_queue_lock held and the URBs stopped */
+/* Must be called with stream_lock held and the isochronous transfers stopped */
 void smi2021_clear_queue(struct smi2021 *smi2021, enum vb2_buffer_state state)
 {
 	struct smi2021_buf *buf, *tmp;
