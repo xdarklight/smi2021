@@ -13,8 +13,8 @@ test: test.c parser_extract.h
 	$(CC) -O2 -Wall -Wextra -Wno-unused-parameter -o $@ test.c
 
 parser_extract.h: $(DRIVER_SRC)
-	awk '/^static bool is_sav\(u8 trc\)/,/^ \* The device delivers data in chunks/' \
-		$< | head -n -3 > $@
+	awk '/^static struct smi2021_buf \*smi2021_get_buf\(/,/^static void smi2021_process_packet\(/' \
+		$< | head -n -1 > $@
 
 clean:
 	rm -f test parser_extract.h

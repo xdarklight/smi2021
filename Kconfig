@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 config VIDEO_SMI2021
 	tristate "Somagic SMI2021 USB video capture support"
-	depends on VIDEO_DEV && I2C && SND && USB
+	depends on VIDEO_DEV && I2C && SND
 	select VIDEOBUF2_VMALLOC
 	select VIDEO_SAA711X
 	select SND_PCM

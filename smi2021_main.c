@@ -10,37 +10,42 @@
  */
 
 #include <linux/bits.h>
+#include <linux/build_bug.h>
+#include <linux/cleanup.h>
 #include <linux/module.h>
 #include <linux/slab.h>
+#include <linux/string.h>
 #include <linux/unaligned.h>
 
+#include <media/i2c/saa7115.h>
 #include <media/v4l2-common.h>
 
 #include "smi2021.h"
 
-#define SMI2021_DRIVER_NAME		"smi2021"
-
 #define SMI2021_USB_VENDOR_ID		0x1c88
-#define SMI2021_USB_BOOTLOADER_ID	0x0007
 
-/* Timeout for the vendor specific control requests, in milliseconds */
-#define SMI2021_CTRL_TIMEOUT		1000
+/* Vendor specific control request used for all register access */
+#define SMI2021_USB_REQUEST		0x01
+#define SMI2021_USB_INDEX		0x00
+#define SMI2021_CTRL_TIMEOUT		1000	/* ms */
 
-/* First byte of a mode control request */
-#define SMI2021_MODE_CTRL_HEAD		0x01
-#define SMI2021_MODE_CAPTURE		0x05
+/* Alternate setting with the isochronous endpoint */
+#define SMI2021_ALTSETTING		2
+#define SMI2021_ISOC_PACKETS		10
+
+/* Values of smi2021_hw_state.state */
 #define SMI2021_MODE_STANDBY		0x03
+#define SMI2021_MODE_CAPTURE		0x05
 
-/* First byte of a register access request */
+/* Head byte of a register access request */
 #define SMI2021_REG_CTRL_HEAD		0x0b
 
 /*
- * Values for smi2021_reg_ctrl_transfer.data_cntl and .data_offset. These
- * select the kind of register access being requested. Only the combinations
- * below are known; the meaning of the individual bits is not.
+ * Values of smi2021_reg_msg.data_cntl and .data_offset, which select the kind
+ * of register access. Only these combinations are known; the meaning of the
+ * individual bits is not.
  */
 #define SMI2021_CNTL_SMI_WRITE		0x00
-#define SMI2021_CNTL_SMI_READ		0x20
 #define SMI2021_CNTL_I2C_PREPARE_READ	0x84
 #define SMI2021_CNTL_I2C_READ		0xa0
 #define SMI2021_CNTL_I2C_WRITE		0xc0
@@ -58,116 +63,145 @@
 #define SMI2021_REG_STREAM_EN		0x1800
 #define SMI2021_REG_STREAM_EN_ON	0x0d
 
-/* I2C address of the saa7113 compatible video decoder */
+/* saa7113 compatible video decoder */
 #define SMI2021_DECODER_I2C_ADDR	0x4a
+#define SMI2021_DECODER_CHROMA_CNTL_1	0x0e
+/* Every write with CDTO set resets the colour subcarrier DTO phase */
+#define SMI2021_DECODER_CDTO		BIT(7)
 
 /*
- * Decoder register 0x0e ("chroma control 1"). Setting CDTO resets the colour
- * subcarrier DTO at the start of every field.
+ * The isochronous stream consists of chunks, each of them starting with a
+ * magic word that identifies its payload.
  */
-#define SAA7113_REG_CHROMA_CNTL_1	0x0e
-#define SAA7113_CHROMA_CNTL_1_CDTO	BIT(7)
-
-/* Magic words identifying the payload of an isochronous chunk */
-#define SMI2021_MAGIC_VIDEO		0xaaaa0000
-#define SMI2021_MAGIC_AUDIO		0xaaaa0001
+#define SMI2021_CHUNK_SIZE		0x400
+#define SMI2021_CHUNK_HDR_SIZE		4
+#define SMI2021_CHUNK_MAGIC_VIDEO	0xaaaa0000
+#define SMI2021_CHUNK_MAGIC_AUDIO	0xaaaa0001
 
 /*
- * The smi2021 chip handles two different types of register settings:
- * settings for the video decoder, which are forwarded over i2c, and settings
- * for the smi2021 chip itself. Both are passed with the struct below; the
- * data_cntl and data_offset members tell the device which kind of setting it
- * is receiving and whether it is a read or a write request.
+ * Bits of the fourth word of a timing reference code, see Table 2 of ITU-R
+ * BT.656. The protection bits are ignored, as the decoder datasheet advises.
  */
-struct smi2021_reg_ctrl_transfer {
+#define SMI2021_TRC_H			BIT(4)	/* EAV rather than SAV */
+#define SMI2021_TRC_V			BIT(5)	/* vertical blanking */
+#define SMI2021_TRC_F			BIT(6)	/* second field */
+
+struct smi2021_reg_msg {
 	u8 head;
 	u8 i2c_addr;
 	u8 data_cntl;
 	u8 data_offset;
 	u8 data_size;
-	union data {
+	union {
 		u8 val;
-		struct i2c_data {
+		struct {
 			u8 reg;
 			u8 val;
-		} __packed i2c_data;
-		struct smi_data {
+		} __packed i2c;
+		struct {
 			__be16 reg;
 			u8 val;
-		} __packed smi_data;
+		} __packed smi;
 		u8 reserved[8];
 	} __packed data;
 } __packed;
+static_assert(sizeof(struct smi2021_reg_msg) == 13);
+
+int smi2021_ctrl_write(struct usb_device *udev, u16 value, const void *data,
+		       u16 size)
+{
+	return usb_control_msg_send(udev, 0, SMI2021_USB_REQUEST,
+				    USB_DIR_OUT | USB_TYPE_VENDOR |
+				    USB_RECIP_DEVICE, value, SMI2021_USB_INDEX,
+				    data, size, SMI2021_CTRL_TIMEOUT,
+				    GFP_KERNEL);
+}
+
+int smi2021_ctrl_read(struct usb_device *udev, u16 value, void *data,
+		      u16 size)
+{
+	return usb_control_msg_recv(udev, 0, SMI2021_USB_REQUEST,
+				    USB_DIR_IN | USB_TYPE_VENDOR |
+				    USB_RECIP_DEVICE, value, SMI2021_USB_INDEX,
+				    data, size, SMI2021_CTRL_TIMEOUT,
+				    GFP_KERNEL);
+}
+
+static int smi2021_send_reg_msg(struct smi2021 *smi2021,
+				const struct smi2021_reg_msg *msg)
+{
+	return smi2021_ctrl_write(smi2021->udev, msg->head, msg, sizeof(*msg));
+}
 
 static int smi2021_set_mode(struct smi2021 *smi2021, u8 mode)
 {
-	struct smi2021_set_hw_state state = {
-		.head = SMI2021_MODE_CTRL_HEAD,
+	struct smi2021_hw_state state = {
+		.head = SMI2021_HW_STATE_HEAD,
 		.state = mode,
 	};
 
-	if (!smi2021->udev)
-		return -ENODEV;
+	guard(mutex)(&smi2021->reg_lock);
 
-	return usb_control_msg_send(smi2021->udev, 0, SMI2021_USB_REQUEST,
-				    USB_DIR_OUT | USB_TYPE_VENDOR |
-				    USB_RECIP_DEVICE,
-				    state.head, SMI2021_USB_INDEX,
-				    &state, sizeof(state),
-				    SMI2021_CTRL_TIMEOUT, GFP_KERNEL);
+	return smi2021_ctrl_write(smi2021->udev, state.head, &state,
+				  sizeof(state));
 }
 
-static int smi2021_ctrl_send(struct smi2021 *smi2021,
-			     const struct smi2021_reg_ctrl_transfer *msg)
+static int smi2021_write_reg(struct smi2021 *smi2021, u16 reg, u8 val)
 {
-	return usb_control_msg_send(smi2021->udev, 0, SMI2021_USB_REQUEST,
-				    USB_DIR_OUT | USB_TYPE_VENDOR |
-				    USB_RECIP_DEVICE,
-				    msg->head, SMI2021_USB_INDEX,
-				    msg, sizeof(*msg),
-				    SMI2021_CTRL_TIMEOUT, GFP_KERNEL);
-}
-
-static int smi2021_get_reg(struct smi2021 *smi2021, u8 i2c_addr,
-			   u16 reg, u8 *val)
-{
-	struct smi2021_reg_ctrl_transfer msg = {
+	struct smi2021_reg_msg msg = {
 		.head = SMI2021_REG_CTRL_HEAD,
+		.data_cntl = SMI2021_CNTL_SMI_WRITE,
+		.data_offset = SMI2021_OFFSET_SMI,
 		.data_size = sizeof(u8),
+		.data.smi.reg = cpu_to_be16(reg),
+		.data.smi.val = val,
+	};
+
+	guard(mutex)(&smi2021->reg_lock);
+
+	return smi2021_send_reg_msg(smi2021, &msg);
+}
+
+static int smi2021_i2c_write(struct smi2021 *smi2021, u8 addr, u8 reg, u8 val)
+{
+	struct smi2021_reg_msg msg = {
+		.head = SMI2021_REG_CTRL_HEAD,
+		.i2c_addr = addr,
+		.data_cntl = SMI2021_CNTL_I2C_WRITE,
+		.data_offset = SMI2021_OFFSET_I2C,
+		.data_size = sizeof(u8),
+		.data.i2c.reg = reg,
+		.data.i2c.val = val,
+	};
+
+	guard(mutex)(&smi2021->reg_lock);
+
+	return smi2021_send_reg_msg(smi2021, &msg);
+}
+
+static int smi2021_i2c_read(struct smi2021 *smi2021, u8 addr, u8 reg, u8 *val)
+{
+	struct smi2021_reg_msg msg = {
+		.head = SMI2021_REG_CTRL_HEAD,
+		.i2c_addr = addr,
+		.data_cntl = SMI2021_CNTL_I2C_PREPARE_READ,
+		.data_size = sizeof(u8),
+		.data.i2c.reg = reg,
 	};
 	int rc;
 
-	*val = 0;
+	guard(mutex)(&smi2021->reg_lock);
 
-	if (!smi2021->udev)
-		return -ENODEV;
-
-	if (i2c_addr) {
-		msg.i2c_addr = i2c_addr;
-		msg.data_cntl = SMI2021_CNTL_I2C_PREPARE_READ;
-		msg.data.i2c_data.reg = reg;
-
-		rc = smi2021_ctrl_send(smi2021, &msg);
-		if (rc)
-			return rc;
-
-		msg.data_cntl = SMI2021_CNTL_I2C_READ;
-	} else {
-		msg.data_cntl = SMI2021_CNTL_SMI_READ;
-		msg.data_offset = SMI2021_OFFSET_SMI;
-		msg.data.smi_data.reg = cpu_to_be16(reg);
-	}
-
-	rc = smi2021_ctrl_send(smi2021, &msg);
+	rc = smi2021_send_reg_msg(smi2021, &msg);
 	if (rc)
 		return rc;
 
-	rc = usb_control_msg_recv(smi2021->udev, 0, SMI2021_USB_REQUEST,
-				  USB_DIR_IN | USB_TYPE_VENDOR |
-				  USB_RECIP_DEVICE,
-				  msg.head, SMI2021_USB_INDEX,
-				  &msg, sizeof(msg),
-				  SMI2021_CTRL_TIMEOUT, GFP_KERNEL);
+	msg.data_cntl = SMI2021_CNTL_I2C_READ;
+	rc = smi2021_send_reg_msg(smi2021, &msg);
+	if (rc)
+		return rc;
+
+	rc = smi2021_ctrl_read(smi2021->udev, msg.head, &msg, sizeof(msg));
 	if (rc)
 		return rc;
 
@@ -176,84 +210,37 @@ static int smi2021_get_reg(struct smi2021 *smi2021, u8 i2c_addr,
 	return 0;
 }
 
-static int smi2021_set_reg(struct smi2021 *smi2021, u8 i2c_addr,
-			   u16 reg, u8 val)
+static int smi2021_smbus_xfer(struct i2c_adapter *adap, u16 addr,
+			      unsigned short flags, char read_write, u8 command,
+			      int size, union i2c_smbus_data *data)
 {
-	struct smi2021_reg_ctrl_transfer msg = {
-		.head = SMI2021_REG_CTRL_HEAD,
-		.data_size = sizeof(u8),
-	};
+	struct smi2021 *smi2021 = i2c_get_adapdata(adap);
 
-	if (!smi2021->udev)
-		return -ENODEV;
-
-	if (i2c_addr) {
-		msg.i2c_addr = i2c_addr;
-		msg.data_cntl = SMI2021_CNTL_I2C_WRITE;
-		msg.data_offset = SMI2021_OFFSET_I2C;
-		msg.data.i2c_data.reg = reg;
-		msg.data.i2c_data.val = val;
-	} else {
-		msg.data_cntl = SMI2021_CNTL_SMI_WRITE;
-		msg.data_offset = SMI2021_OFFSET_SMI;
-		msg.data.smi_data.reg = cpu_to_be16(reg);
-		msg.data.smi_data.val = val;
-	}
-
-	return smi2021_ctrl_send(smi2021, &msg);
-}
-
-static int smi2021_i2c_xfer(struct i2c_adapter *i2c_adap,
-			    struct i2c_msg msgs[], int num)
-{
-	struct smi2021 *smi2021 = i2c_adap->algo_data;
-	int rc;
-
-	switch (num) {
-	case 2: /* Read register */
-		if (msgs[0].len != 1 || msgs[1].len != 1)
-			return -EOPNOTSUPP;
-
-		if (!(msgs[1].flags & I2C_M_RD))
-			return -EOPNOTSUPP;
-
-		rc = smi2021_get_reg(smi2021, msgs[0].addr, msgs[0].buf[0],
-				     msgs[1].buf);
-		break;
-	case 1: /* Write register */
-		if (msgs[0].len == 0)
-			return num;
-
-		if (msgs[0].len != 2)
-			return -EOPNOTSUPP;
-
-		rc = smi2021_set_reg(smi2021, msgs[0].addr, msgs[0].buf[0],
-				     msgs[0].buf[1]);
-		break;
-	default:
+	if (size != I2C_SMBUS_BYTE_DATA)
 		return -EOPNOTSUPP;
-	}
 
-	return rc < 0 ? rc : num;
+	if (read_write == I2C_SMBUS_READ)
+		return smi2021_i2c_read(smi2021, addr, command, &data->byte);
+
+	return smi2021_i2c_write(smi2021, addr, command, data->byte);
 }
 
 static u32 smi2021_i2c_functionality(struct i2c_adapter *adap)
 {
-	return I2C_FUNC_SMBUS_EMUL;
+	return I2C_FUNC_SMBUS_BYTE_DATA;
 }
 
-static const struct i2c_algorithm smi2021_algo = {
-	.master_xfer = smi2021_i2c_xfer,
+static const struct i2c_algorithm smi2021_i2c_algo = {
+	.smbus_xfer = smi2021_smbus_xfer,
 	.functionality = smi2021_i2c_functionality,
 };
 
 static int smi2021_initialize(struct smi2021 *smi2021)
 {
 	/*
-	 * These registers initialize the smi2021 chip. Their exact meaning is
-	 * unknown; the sequence is taken from the vendor driver and is
-	 * believed to toggle the reset pins of the audio ADC and the video
-	 * decoder.
+	 * The meaning of these registers is unknown. The sequence was taken
+	 * from the vendor driver and is believed to toggle the reset lines of
+	 * the audio ADC and of the video decoder.
 	 */
 	static const u8 init[][2] = {
 		{ 0x3a, 0x80 },
@@ -269,8 +256,8 @@ static int smi2021_initialize(struct smi2021 *smi2021)
 	int rc;
 
 	for (i = 0; i < ARRAY_SIZE(init); i++) {
-		rc = smi2021_set_reg(smi2021, 0, init[i][0], init[i][1]);
-		if (rc < 0)
+		rc = smi2021_write_reg(smi2021, init[i][0], init[i][1]);
+		if (rc)
 			return rc;
 	}
 
@@ -279,100 +266,78 @@ static int smi2021_initialize(struct smi2021 *smi2021)
 
 static struct smi2021_buf *smi2021_get_buf(struct smi2021 *smi2021)
 {
-	struct smi2021_buf *buf = NULL;
-	unsigned long flags;
+	struct smi2021_buf *buf;
 
-	spin_lock_irqsave(&smi2021->buf_lock, flags);
-	if (!list_empty(&smi2021->avail_bufs)) {
-		buf = list_first_entry(&smi2021->avail_bufs,
+	guard(spinlock_irqsave)(&smi2021->buf_lock);
+
+	buf = list_first_entry_or_null(&smi2021->avail_bufs,
 				       struct smi2021_buf, list);
+	if (buf)
 		list_del(&buf->list);
-	}
-	spin_unlock_irqrestore(&smi2021->buf_lock, flags);
 
 	return buf;
 }
 
+/* Whether all lines of the current field have been received */
+static bool smi2021_field_done(struct smi2021 *smi2021,
+			       const struct smi2021_buf *buf)
+{
+	return buf->pos >= SMI2021_BYTES_PER_LINE * (smi2021->cur_height / 2);
+}
+
 static void smi2021_buf_done(struct smi2021 *smi2021)
 {
-	unsigned int lines_per_field = smi2021->cur_height / 2;
 	struct smi2021_buf *buf = smi2021->cur_buf;
 
 	buf->vb.vb2_buf.timestamp = ktime_get_ns();
 	buf->vb.sequence = smi2021->sequence++;
 	buf->vb.field = V4L2_FIELD_INTERLACED;
-
-	/*
-	 * buf->pos holds the number of active video bytes received for the
-	 * field that just ended. If the device did not send a full field the
-	 * frame is incomplete, so hand it back with an error.
-	 */
-	if (buf->pos < SMI2021_BYTES_PER_LINE * lines_per_field) {
-		vb2_set_plane_payload(&buf->vb.vb2_buf, 0, 0);
-		vb2_buffer_done(&buf->vb.vb2_buf, VB2_BUF_STATE_ERROR);
-	} else {
-		vb2_set_plane_payload(&buf->vb.vb2_buf, 0,
-				      SMI2021_BYTES_PER_LINE *
-				      smi2021->cur_height);
-		vb2_buffer_done(&buf->vb.vb2_buf, VB2_BUF_STATE_DONE);
-	}
+	vb2_set_plane_payload(&buf->vb.vb2_buf, 0,
+			      SMI2021_BYTES_PER_LINE * smi2021->cur_height);
+	vb2_buffer_done(&buf->vb.vb2_buf,
+			smi2021_field_done(smi2021, buf) ?
+			VB2_BUF_STATE_DONE : VB2_BUF_STATE_ERROR);
 
 	smi2021->cur_buf = NULL;
 }
 
-static bool is_sav(u8 trc)
-{
-	return !(trc & SMI2021_TRC_EAV);
-}
-
-static bool is_active_video(u8 trc)
-{
-	return !(trc & SMI2021_TRC_VBI);
-}
-
-static bool is_field2(u8 trc)
-{
-	return trc & SMI2021_TRC_FIELD_2;
-}
-
 /*
- * Parse a timing reference code.
+ * Parse the fourth word of a timing reference code.
  *
- * Grab a new buffer from the queue when the device starts sending a new
- * frame, and hand the buffer back once both of its fields are complete.
+ * A frame starts with the first SAV of the first field that follows a second
+ * field. Hand the current buffer back there and start filling the next one.
  */
-static void parse_trc(struct smi2021 *smi2021, u8 trc)
+static void smi2021_parse_trc(struct smi2021 *smi2021, u8 trc)
 {
-	unsigned int lines_per_field = smi2021->cur_height / 2;
 	struct smi2021_buf *buf = smi2021->cur_buf;
+	bool field2 = trc & SMI2021_TRC_F;
+	bool frame_start;
 
-	if (!buf) {
-		/*
-		 * Only start filling a buffer at the start of the first
-		 * field, every other starting point would yield an
-		 * incomplete frame.
-		 */
-		if (!is_sav(trc) || !is_active_video(trc) || is_field2(trc))
-			return;
-
-		buf = smi2021_get_buf(smi2021);
-		if (!buf)
-			return;
-
-		smi2021->cur_buf = buf;
-	}
-
-	if (!is_sav(trc)) {
-		/* End of VBI or of active video */
-		buf->in_blank = true;
+	if (trc & SMI2021_TRC_H) {
+		/* EAV: horizontal blanking follows */
+		if (buf)
+			buf->in_blank = true;
 		return;
 	}
 
-	/* Start of VBI or of active video */
-	buf->in_blank = !is_active_video(trc);
+	frame_start = smi2021->last_field2 && !field2;
+	smi2021->last_field2 = field2;
 
-	if (!buf->second_field && is_field2(trc)) {
-		if (buf->pos < SMI2021_BYTES_PER_LINE * lines_per_field) {
+	if (frame_start) {
+		if (buf)
+			smi2021_buf_done(smi2021);
+
+		buf = smi2021_get_buf(smi2021);
+		smi2021->cur_buf = buf;
+	}
+
+	if (!buf)
+		return;
+
+	buf->in_blank = trc & SMI2021_TRC_V;
+
+	if (field2 && !buf->second_field) {
+		if (!smi2021_field_done(smi2021, buf)) {
 			/* The first field was short, drop the frame */
 			smi2021_buf_done(smi2021);
 			return;
@@ -380,129 +345,87 @@ static void parse_trc(struct smi2021 *smi2021, u8 trc)
 
 		buf->second_field = true;
 		buf->pos = 0;
-		return;
 	}
-
-	if (buf->second_field && !is_field2(trc))
-		smi2021_buf_done(smi2021);
 }
 
 /*
- * Copy a run of active video data into the current buffer.
+ * Copy active video data into the current buffer.
  *
  * The device sends the two fields of a frame one after the other while the
- * buffer holds them interleaved, so line n of a field is written to line
- * 2n (first field) or 2n + 1 (second field) of the buffer.
+ * buffer holds them interleaved, so line n of a field goes to line 2n (first
+ * field) or 2n + 1 (second field) of the buffer.
  */
-static void copy_video(struct smi2021 *smi2021, const u8 *src,
-		       unsigned int len)
+static void smi2021_copy_video(struct smi2021 *smi2021, const u8 *src,
+			       unsigned int len)
 {
+	unsigned int lines_per_field = smi2021->cur_height / 2;
 	struct smi2021_buf *buf = smi2021->cur_buf;
 
 	if (!buf || buf->in_blank)
 		return;
 
 	while (len) {
-		unsigned int pos_in_line = buf->pos % SMI2021_BYTES_PER_LINE;
 		unsigned int line = buf->pos / SMI2021_BYTES_PER_LINE;
-		unsigned int offset, chunk;
+		unsigned int col = buf->pos % SMI2021_BYTES_PER_LINE;
+		unsigned int n = min(len, SMI2021_BYTES_PER_LINE - col);
 
-		offset = (line * 2 + buf->second_field) *
-			 SMI2021_BYTES_PER_LINE + pos_in_line;
-		if (offset >= buf->length)
+		/* The decoder may flag more lines as active than we capture */
+		if (line >= lines_per_field)
 			return;
 
-		/*
-		 * Copy at most up to the end of the current line, so that a
-		 * run spanning a line boundary does not spill into the line
-		 * of the other field that follows it in the buffer.
-		 */
-		chunk = min(len, SMI2021_BYTES_PER_LINE - pos_in_line);
-		chunk = min(chunk, buf->length - offset);
+		memcpy(buf->mem + (2 * line + buf->second_field) *
+		       SMI2021_BYTES_PER_LINE + col, src, n);
 
-		memcpy(buf->mem + offset, src, chunk);
-
-		buf->pos += chunk;
-		src += chunk;
-		len -= chunk;
+		buf->pos += n;
+		src += n;
+		len -= n;
 	}
 }
 
 /*
- * Scan the video data coming from the decoder.
- *
- * Active video is framed by timing reference codes:
- *	0xff 0x00 0x00 <TRC>
- * where TRC is described in the saa7113 datasheet. Everything in between is
- * video data. A timing reference code may be split across two chunks, so the
- * scanner state is kept in smi2021->sync_state.
+ * Scan the video data from the decoder for ITU-R BT.656 timing reference
+ * codes: 0xff 0x00 0x00 followed by a word with the field and blanking flags.
+ * Everything else is video data. A code may be split across two chunks.
  */
-static void parse_video(struct smi2021 *smi2021, const u8 *p,
-			unsigned int size)
+static void smi2021_parse_video(struct smi2021 *smi2021, const u8 *p,
+				unsigned int size)
 {
 	static const u8 trc_prefix[] = { 0xff, 0x00, 0x00 };
 	unsigned int i = 0;
 
 	while (i < size) {
-		unsigned int consumed, start;
-		u8 byte;
+		if (!smi2021->trc_prefix_len) {
+			/* Copy video data up to the next potential code */
+			const u8 *ff = memchr(p + i, 0xff, size - i);
+			unsigned int len = ff ? ff - (p + i) : size - i;
 
-		if (smi2021->sync_state == HSYNC) {
-			/* Copy video data up to the next potential TRC */
-			start = i;
-			while (i < size && p[i] != 0xff)
+			smi2021_copy_video(smi2021, p + i, len);
+			i += len;
+			if (ff) {
+				smi2021->trc_prefix_len = 1;
 				i++;
-
-			copy_video(smi2021, p + start, i - start);
-
-			if (i < size) {
-				i++;
-				smi2021->sync_state = SYNCZ1;
 			}
-			continue;
+		} else if (smi2021->trc_prefix_len == sizeof(trc_prefix)) {
+			smi2021->trc_prefix_len = 0;
+			smi2021_parse_trc(smi2021, p[i++]);
+		} else if (p[i] == 0x00) {
+			smi2021->trc_prefix_len++;
+			i++;
+		} else {
+			/*
+			 * Not a code after all, so the prefix bytes seen so
+			 * far are video data. Rescan the current byte, it may
+			 * start a new code.
+			 */
+			smi2021_copy_video(smi2021, trc_prefix,
+					   smi2021->trc_prefix_len);
+			smi2021->trc_prefix_len = 0;
 		}
-
-		byte = p[i++];
-
-		switch (smi2021->sync_state) {
-		case SYNCZ1:
-			if (byte == 0x00) {
-				smi2021->sync_state = SYNCZ2;
-				continue;
-			}
-			consumed = 1;
-			break;
-		case SYNCZ2:
-			if (byte == 0x00) {
-				smi2021->sync_state = TRC;
-				continue;
-			}
-			consumed = 2;
-			break;
-		default: /* TRC */
-			smi2021->sync_state = HSYNC;
-			parse_trc(smi2021, byte);
-			continue;
-		}
-
-		/*
-		 * This was not a timing reference code after all, so the
-		 * prefix bytes already consumed are video data. Emit them and
-		 * rescan the current byte, which may start a new code.
-		 */
-		smi2021->sync_state = HSYNC;
-		copy_video(smi2021, trc_prefix, consumed);
-		i--;
 	}
 }
 
-/*
- * The device delivers data in chunks of SMI2021_CHUNK_SIZE bytes, each
- * starting with a magic word identifying its payload:
- *	0xaa 0xaa 0x00 0x00 = video data from the decoder
- *	0xaa 0xaa 0x00 0x01 = 24 bit 2 channel PCM audio data
- */
-static void process_packet(struct smi2021 *smi2021, u8 *p, unsigned int size)
+static void smi2021_process_packet(struct smi2021 *smi2021, const u8 *p,
+				   unsigned int size)
 {
 	unsigned int i;
 
@@ -513,22 +436,21 @@ static void process_packet(struct smi2021 *smi2021, u8 *p, unsigned int size)
 	}
 
 	for (i = 0; i < size; i += SMI2021_CHUNK_SIZE) {
-		u8 *chunk = p + i;
+		const u8 *data = p + i + SMI2021_CHUNK_HDR_SIZE;
+		unsigned int len = SMI2021_CHUNK_SIZE - SMI2021_CHUNK_HDR_SIZE;
 
-		switch (get_unaligned_be32(chunk)) {
-		case SMI2021_MAGIC_VIDEO:
-			parse_video(smi2021, chunk + 4,
-				    SMI2021_CHUNK_SIZE - 4);
+		switch (get_unaligned_be32(p + i)) {
+		case SMI2021_CHUNK_MAGIC_VIDEO:
+			smi2021_parse_video(smi2021, data, len);
 			break;
-		case SMI2021_MAGIC_AUDIO:
-			smi2021_audio(smi2021, chunk + 4,
-				      SMI2021_CHUNK_SIZE - 4);
+		case SMI2021_CHUNK_MAGIC_AUDIO:
+			smi2021_audio(smi2021, data, len);
 			break;
 		}
 	}
 }
 
-static void smi2021_iso_cb(struct urb *urb)
+static void smi2021_isoc_complete(struct urb *urb)
 {
 	struct smi2021 *smi2021 = urb->context;
 	int i, rc;
@@ -540,7 +462,7 @@ static void smi2021_iso_cb(struct urb *urb)
 	case -ENOENT:
 	case -ECONNRESET:
 	case -ESHUTDOWN:
-		/* The URB was killed or the device is gone, do not resubmit */
+		/* The URB was killed or the device is gone */
 		return;
 	default:
 		dev_warn_ratelimited(smi2021->dev, "urb error %d\n",
@@ -549,25 +471,23 @@ static void smi2021_iso_cb(struct urb *urb)
 	}
 
 	for (i = 0; i < urb->number_of_packets; i++) {
-		int size = urb->iso_frame_desc[i].actual_length;
-		u8 *data = urb->transfer_buffer +
-			   urb->iso_frame_desc[i].offset;
+		const struct usb_iso_packet_descriptor *desc =
+			&urb->iso_frame_desc[i];
 
-		if (urb->iso_frame_desc[i].status == 0 && size)
-			process_packet(smi2021, data, size);
-
-		urb->iso_frame_desc[i].status = 0;
-		urb->iso_frame_desc[i].actual_length = 0;
+		if (!desc->status)
+			smi2021_process_packet(smi2021,
+					       urb->transfer_buffer +
+					       desc->offset,
+					       desc->actual_length);
 	}
 
-	urb->status = 0;
 	rc = usb_submit_urb(urb, GFP_ATOMIC);
 	if (rc)
 		dev_warn_ratelimited(smi2021->dev,
-				     "urb re-submit failed (%d)\n", rc);
+				     "urb resubmit failed: %d\n", rc);
 }
 
-static void smi2021_cancel_isoc(struct smi2021 *smi2021)
+static void smi2021_kill_isoc(struct smi2021 *smi2021)
 {
 	unsigned int i;
 
@@ -575,86 +495,45 @@ static void smi2021_cancel_isoc(struct smi2021 *smi2021)
 		usb_kill_urb(smi2021->urbs[i]);
 }
 
-/*
- * Release all URBs and transfer buffers.
- * All URBs must have been killed before calling this.
- */
+/* All URBs must have been killed before calling this */
 static void smi2021_free_isoc(struct smi2021 *smi2021)
 {
-	unsigned int i;
-
-	for (i = 0; i < smi2021->num_urbs; i++) {
-		struct urb *urb = smi2021->urbs[i];
-
-		if (!urb)
-			continue;
-
-		kfree(urb->transfer_buffer);
-		usb_free_urb(urb);
-		smi2021->urbs[i] = NULL;
-	}
-
-	kfree(smi2021->urbs);
-	smi2021->urbs = NULL;
-	smi2021->num_urbs = 0;
-}
-
-static void smi2021_uninit_isoc(struct smi2021 *smi2021)
-{
-	smi2021_cancel_isoc(smi2021);
-	smi2021_free_isoc(smi2021);
+	while (smi2021->num_urbs)
+		usb_free_urb(smi2021->urbs[--smi2021->num_urbs]);
 }
 
 static int smi2021_alloc_isoc(struct smi2021 *smi2021)
 {
-	unsigned int i, j, sb_size;
+	unsigned int size = SMI2021_ISOC_PACKETS * smi2021->iso_size;
+	unsigned int i;
 
-	/*
-	 * It may be necessary to release the URBs here, since they are
-	 * otherwise only released on disconnect.
-	 */
-	if (smi2021->num_urbs)
-		smi2021_uninit_isoc(smi2021);
+	while (smi2021->num_urbs < SMI2021_ISOC_TRANSFERS) {
+		struct urb *urb = usb_alloc_urb(SMI2021_ISOC_PACKETS,
+						GFP_KERNEL);
 
-	sb_size = SMI2021_ISOC_PACKETS * smi2021->iso_size;
-
-	smi2021->urbs = kcalloc(SMI2021_ISOC_TRANSFERS,
-				sizeof(*smi2021->urbs), GFP_KERNEL);
-	if (!smi2021->urbs)
-		return -ENOMEM;
-
-	for (i = 0; i < SMI2021_ISOC_TRANSFERS; i++) {
-		struct urb *urb;
-
-		urb = usb_alloc_urb(SMI2021_ISOC_PACKETS, GFP_KERNEL);
 		if (!urb)
 			goto err_free;
 
-		smi2021->urbs[i] = urb;
-		smi2021->num_urbs = i + 1;
+		smi2021->urbs[smi2021->num_urbs++] = urb;
 
-		urb->transfer_buffer = kzalloc(sb_size, GFP_KERNEL);
+		urb->transfer_buffer = kmalloc(size, GFP_KERNEL);
 		if (!urb->transfer_buffer)
 			goto err_free;
 
 		urb->dev = smi2021->udev;
 		urb->pipe = usb_rcvisocpipe(smi2021->udev, smi2021->isoc_ep);
-		urb->transfer_buffer_length = sb_size;
-		urb->complete = smi2021_iso_cb;
+		urb->transfer_buffer_length = size;
+		urb->transfer_flags = URB_ISO_ASAP | URB_FREE_BUFFER;
+		urb->complete = smi2021_isoc_complete;
 		urb->context = smi2021;
 		urb->interval = 1;
-		urb->start_frame = 0;
 		urb->number_of_packets = SMI2021_ISOC_PACKETS;
-		urb->transfer_flags = URB_ISO_ASAP;
 
-		for (j = 0; j < SMI2021_ISOC_PACKETS; j++) {
-			urb->iso_frame_desc[j].offset = j * smi2021->iso_size;
-			urb->iso_frame_desc[j].length = smi2021->iso_size;
+		for (i = 0; i < SMI2021_ISOC_PACKETS; i++) {
+			urb->iso_frame_desc[i].offset = i * smi2021->iso_size;
+			urb->iso_frame_desc[i].length = smi2021->iso_size;
 		}
 	}
-
-	dev_dbg(smi2021->dev, "allocated %u urbs of %u bytes\n",
-		smi2021->num_urbs, sb_size);
 
 	return 0;
 
@@ -666,124 +545,98 @@ err_free:
 
 void smi2021_toggle_audio(struct smi2021 *smi2021, bool enable)
 {
-	/*
-	 * This register enables and disables the transfer of audio data over
-	 * USB. The meaning of the value 0x1d is unknown.
-	 */
-	smi2021_set_reg(smi2021, 0, SMI2021_REG_AUDIO_EN,
-			enable ? SMI2021_REG_AUDIO_EN_ON :
-				 SMI2021_REG_AUDIO_EN_OFF);
+	smi2021_write_reg(smi2021, SMI2021_REG_AUDIO_EN,
+			  enable ? SMI2021_REG_AUDIO_EN_ON :
+				   SMI2021_REG_AUDIO_EN_OFF);
 }
 
-int smi2021_start(struct smi2021 *smi2021)
+int smi2021_start_streaming(struct vb2_queue *vq, unsigned int count)
 {
+	struct smi2021 *smi2021 = vb2_get_drv_priv(vq);
 	unsigned int i;
 	int rc;
 	u8 reg;
 
-	if (!smi2021->udev)
-		return -ENODEV;
-
-	if (mutex_lock_interruptible(&smi2021->v4l2_lock))
-		return -ERESTARTSYS;
-
 	smi2021->sequence = 0;
-	smi2021->sync_state = HSYNC;
-	smi2021->cur_buf = NULL;
+	smi2021->trc_prefix_len = 0;
+	smi2021->last_field2 = false;
+
+	rc = smi2021_alloc_isoc(smi2021);
+	if (rc)
+		goto err_clear_queue;
 
 	v4l2_subdev_call(smi2021->decoder, video, s_stream, 1);
 
 	/*
-	 * Set CDTO (bit 7 of the decoder's first chroma control register),
-	 * which resets the colour subcarrier DTO at the start of every field.
-	 * The vendor driver writes this six times; it is not known whether
-	 * repeating the write is actually required.
+	 * The vendor driver resets the decoder's subcarrier DTO six times
+	 * before it starts streaming. It is not known whether this is needed.
 	 */
-	rc = smi2021_get_reg(smi2021, SMI2021_DECODER_I2C_ADDR,
-			     SAA7113_REG_CHROMA_CNTL_1, &reg);
-	if (rc < 0)
-		goto err_stop_subdev;
-
-	reg |= SAA7113_CHROMA_CNTL_1_CDTO;
-
-	for (i = 0; i < 6; i++) {
-		rc = smi2021_set_reg(smi2021, SMI2021_DECODER_I2C_ADDR,
-				     SAA7113_REG_CHROMA_CNTL_1, reg);
-		if (rc < 0)
-			goto err_stop_subdev;
-	}
+	rc = smi2021_i2c_read(smi2021, SMI2021_DECODER_I2C_ADDR,
+			      SMI2021_DECODER_CHROMA_CNTL_1, &reg);
+	for (i = 0; !rc && i < 6; i++)
+		rc = smi2021_i2c_write(smi2021, SMI2021_DECODER_I2C_ADDR,
+				       SMI2021_DECODER_CHROMA_CNTL_1,
+				       reg | SMI2021_DECODER_CDTO);
+	if (rc)
+		goto err_stop_decoder;
 
 	rc = smi2021_set_mode(smi2021, SMI2021_MODE_CAPTURE);
-	if (rc < 0)
-		goto err_stop_subdev;
+	if (rc)
+		goto err_stop_decoder;
 
-	rc = usb_set_interface(smi2021->udev, 0, 2);
-	if (rc < 0)
-		goto err_stop_hw;
+	rc = usb_set_interface(smi2021->udev, smi2021->ifnum,
+			       SMI2021_ALTSETTING);
+	if (rc)
+		goto err_standby;
 
 	/* Only let audio data flow while the PCM device is capturing */
-	smi2021_toggle_audio(smi2021,
-			     atomic_read(&smi2021->adev_capturing) != 0);
-
-	if (!smi2021->num_urbs) {
-		rc = smi2021_alloc_isoc(smi2021);
-		if (rc < 0)
-			goto err_stop_hw;
-	}
+	smi2021_toggle_audio(smi2021, atomic_read(&smi2021->pcm_capturing));
 
 	for (i = 0; i < smi2021->num_urbs; i++) {
 		rc = usb_submit_urb(smi2021->urbs[i], GFP_KERNEL);
 		if (rc) {
-			dev_err(smi2021->dev, "cannot submit urb %u (%d)\n",
+			dev_err(smi2021->dev, "cannot submit urb %u: %d\n",
 				i, rc);
-			goto err_uninit;
+			goto err_kill_urbs;
 		}
 	}
 
-	/* Start the isochronous stream */
-	rc = smi2021_set_reg(smi2021, 0, SMI2021_REG_STREAM_EN,
-			     SMI2021_REG_STREAM_EN_ON);
-	if (rc < 0)
-		goto err_uninit;
-
-	mutex_unlock(&smi2021->v4l2_lock);
+	rc = smi2021_write_reg(smi2021, SMI2021_REG_STREAM_EN,
+			       SMI2021_REG_STREAM_EN_ON);
+	if (rc)
+		goto err_kill_urbs;
 
 	return 0;
 
-err_uninit:
-	smi2021_uninit_isoc(smi2021);
-err_stop_hw:
-	usb_set_interface(smi2021->udev, 0, 0);
+err_kill_urbs:
+	smi2021_kill_isoc(smi2021);
+	usb_set_interface(smi2021->udev, smi2021->ifnum, 0);
+err_standby:
 	smi2021_set_mode(smi2021, SMI2021_MODE_STANDBY);
-err_stop_subdev:
+err_stop_decoder:
 	v4l2_subdev_call(smi2021->decoder, video, s_stream, 0);
-
-	/*
-	 * start_streaming() failed, so the buffers that were queued before
-	 * it was called have to go back to the queued state.
-	 */
+	smi2021_free_isoc(smi2021);
+err_clear_queue:
 	smi2021_clear_queue(smi2021, VB2_BUF_STATE_QUEUED);
-
-	mutex_unlock(&smi2021->v4l2_lock);
 
 	return rc;
 }
 
-void smi2021_stop(struct smi2021 *smi2021)
+void smi2021_stop_streaming(struct vb2_queue *vq)
 {
-	mutex_lock(&smi2021->v4l2_lock);
+	struct smi2021 *smi2021 = vb2_get_drv_priv(vq);
 
-	smi2021_cancel_isoc(smi2021);
+	smi2021_kill_isoc(smi2021);
 
+	/* After a disconnect, this is called when the last user goes away */
 	if (smi2021->udev) {
 		v4l2_subdev_call(smi2021->decoder, video, s_stream, 0);
 		smi2021_set_mode(smi2021, SMI2021_MODE_STANDBY);
-		usb_set_interface(smi2021->udev, 0, 0);
+		usb_set_interface(smi2021->udev, smi2021->ifnum, 0);
 	}
 
+	smi2021_free_isoc(smi2021);
 	smi2021_clear_queue(smi2021, VB2_BUF_STATE_ERROR);
-
-	mutex_unlock(&smi2021->v4l2_lock);
 }
 
 static void smi2021_release(struct v4l2_device *v4l2_dev)
@@ -791,13 +644,14 @@ static void smi2021_release(struct v4l2_device *v4l2_dev)
 	struct smi2021 *smi2021 = container_of(v4l2_dev, struct smi2021,
 					       v4l2_dev);
 
+	vb2_queue_release(&smi2021->vb_vidq);
+
 	/* Unregister the decoder before the i2c adapter it lives on */
 	v4l2_device_unregister(&smi2021->v4l2_dev);
 	i2c_del_adapter(&smi2021->i2c_adap);
-
 	v4l2_ctrl_handler_free(&smi2021->ctrl_handler);
-	vb2_queue_release(&smi2021->vb_vidq);
 
+	mutex_destroy(&smi2021->reg_lock);
 	mutex_destroy(&smi2021->v4l2_lock);
 	mutex_destroy(&smi2021->vb_queue_lock);
 
@@ -805,202 +659,171 @@ static void smi2021_release(struct v4l2_device *v4l2_dev)
 }
 
 /*
- * DEVICE - PROBE & DISCONNECT
+ * The driver tells active video from blanking by the V flag of the timing
+ * reference codes. Have the decoder generate it from VREF with the long VREF
+ * range: according to Tables 6 and 7 of the SAA7113H datasheet this flags 288
+ * lines per field as active for 625 line standards and 242 lines for 525 line
+ * ones, of which the driver captures the first 240.
  */
+static enum saa7113_r10_ofts smi2021_decoder_ofts = SAA7113_OFTS_VFLAG_BY_VREF;
+static bool smi2021_decoder_vrln = true;
+
+static struct saa7115_platform_data smi2021_decoder_pdata = {
+	.saa7113_r10_ofts = &smi2021_decoder_ofts,
+	.saa7113_r10_vrln = &smi2021_decoder_vrln,
+};
+
+static const struct smi2021_input smi2021_dc60_inputs[] = {
+	{ "Composite", SAA7115_COMPOSITE0 },
+	{ "S-Video", SAA7115_SVIDEO1 },
+};
+
+static const struct smi2021_input smi2021_easycap002_inputs[] = {
+	{ "Composite 0", SAA7115_COMPOSITE0 },
+	{ "Composite 1", SAA7115_COMPOSITE1 },
+	{ "Composite 2", SAA7115_COMPOSITE2 },
+	{ "Composite 3", SAA7115_COMPOSITE3 },
+};
+
+static const struct smi2021_board smi2021_dc60 = {
+	.inputs = smi2021_dc60_inputs,
+	.num_inputs = ARRAY_SIZE(smi2021_dc60_inputs),
+};
+
+static const struct smi2021_board smi2021_easycap002 = {
+	.inputs = smi2021_easycap002_inputs,
+	.num_inputs = ARRAY_SIZE(smi2021_easycap002_inputs),
+};
+
+#define SMI2021_DEVICE(pid, board) \
+	USB_DEVICE(SMI2021_USB_VENDOR_ID, pid), \
+	.driver_info = (kernel_ulong_t)(board)
 
 static const struct usb_device_id smi2021_usb_device_id_table[] = {
-	{ USB_DEVICE(SMI2021_USB_VENDOR_ID, SMI2021_USB_BOOTLOADER_ID) },
-	{ USB_DEVICE(SMI2021_USB_VENDOR_ID, 0x003c) },
-	{ USB_DEVICE(SMI2021_USB_VENDOR_ID, 0x003d) },
-	{ USB_DEVICE(SMI2021_USB_VENDOR_ID, 0x003e) },
-	{ USB_DEVICE(SMI2021_USB_VENDOR_ID, 0x003f) },
+	/* All devices enumerate with this id until their firmware is loaded */
+	{ SMI2021_DEVICE(0x0007, NULL) },
+	{ SMI2021_DEVICE(0x003c, &smi2021_dc60) },
+	{ SMI2021_DEVICE(0x003d, &smi2021_dc60) },
+	{ SMI2021_DEVICE(0x003e, &smi2021_easycap002) },
+	{ SMI2021_DEVICE(0x003f, &smi2021_easycap002) },
 	{ }
 };
 MODULE_DEVICE_TABLE(usb, smi2021_usb_device_id_table);
 
-/* EasyCAP DC60 and compatibles */
-static const struct smi2021_vid_input dual_input[] = {
-	{
-		.name = "Composite",
-		.type = SAA7115_COMPOSITE0,
-	},
-	{
-		.name = "S-Video",
-		.type = SAA7115_SVIDEO1,
-	},
-};
-
-/* EasyCAP 002 and compatibles */
-static const struct smi2021_vid_input quad_input[] = {
-	{
-		.name = "Composite 0",
-		.type = SAA7115_COMPOSITE0,
-	},
-	{
-		.name = "Composite 1",
-		.type = SAA7115_COMPOSITE1,
-	},
-	{
-		.name = "Composite 2",
-		.type = SAA7115_COMPOSITE2,
-	},
-	{
-		.name = "Composite 3",
-		.type = SAA7115_COMPOSITE3,
-	},
-};
-
 static int smi2021_usb_probe(struct usb_interface *intf,
 			     const struct usb_device_id *devid)
 {
+	const struct smi2021_board *board = (const void *)devid->driver_info;
 	struct usb_device *udev = interface_to_usbdev(intf);
-	const struct usb_endpoint_descriptor *ep;
-	struct i2c_board_info decoder_info = { };
-	struct device *dev = &intf->dev;
+	struct i2c_board_info decoder_info = {
+		I2C_BOARD_INFO("saa7115_auto", SMI2021_DECODER_I2C_ADDR),
+		.platform_data = &smi2021_decoder_pdata,
+	};
+	struct usb_host_interface *alt;
 	struct smi2021 *smi2021;
 	int rc;
 
-	if (le16_to_cpu(udev->descriptor.idProduct) ==
-	    SMI2021_USB_BOOTLOADER_ID)
-		return smi2021_bootloader_probe(intf, devid);
+	if (!board)
+		return smi2021_bootloader_probe(intf);
 
-	if (intf->num_altsetting != 3)
-		return -ENODEV;
-
-	if (intf->altsetting[2].desc.bNumEndpoints != 1)
-		return -ENODEV;
-
-	ep = &intf->altsetting[2].endpoint[0].desc;
-	if (!usb_endpoint_is_isoc_in(ep))
+	alt = usb_altnum_to_altsetting(intf, SMI2021_ALTSETTING);
+	if (!alt || alt->desc.bNumEndpoints != 1 ||
+	    !usb_endpoint_is_isoc_in(&alt->endpoint[0].desc))
 		return -ENODEV;
 
 	smi2021 = kzalloc_obj(*smi2021);
 	if (!smi2021)
 		return -ENOMEM;
 
-	smi2021->dev = dev;
+	smi2021->dev = &intf->dev;
 	smi2021->udev = udev;
-	smi2021->isoc_ep = usb_endpoint_num(ep);
+	smi2021->board = board;
+	smi2021->ifnum = alt->desc.bInterfaceNumber;
+	smi2021->isoc_ep = usb_endpoint_num(&alt->endpoint[0].desc);
+	/* 3072 bytes, as the endpoint has two additional transactions */
+	smi2021->iso_size = usb_endpoint_max_periodic_payload(udev,
+							      &alt->endpoint[0]);
 
-	/*
-	 * High bandwidth isochronous endpoints can transfer more than one
-	 * packet per microframe, so the number of additional transaction
-	 * opportunities has to be taken into account. Without this the
-	 * driver would ask for a third of the data the device sends.
-	 */
-	smi2021->iso_size = usb_endpoint_maxp(ep) * usb_endpoint_maxp_mult(ep);
-
-	switch (le16_to_cpu(udev->descriptor.idProduct)) {
-	case 0x003e:
-	case 0x003f:
-		smi2021->vid_inputs = quad_input;
-		smi2021->vid_input_count = ARRAY_SIZE(quad_input);
-		break;
-	default:
-		smi2021->vid_inputs = dual_input;
-		smi2021->vid_input_count = ARRAY_SIZE(dual_input);
-		break;
-	}
-
-	spin_lock_init(&smi2021->buf_lock);
+	mutex_init(&smi2021->reg_lock);
 	mutex_init(&smi2021->v4l2_lock);
 	mutex_init(&smi2021->vb_queue_lock);
+	spin_lock_init(&smi2021->buf_lock);
 	INIT_LIST_HEAD(&smi2021->avail_bufs);
 
-	/* NTSC is the default */
 	smi2021->cur_norm = V4L2_STD_NTSC;
 	smi2021->cur_height = SMI2021_NTSC_LINES;
 
 	rc = smi2021_vb2_setup(smi2021);
-	if (rc < 0) {
-		dev_err(dev, "could not initialize videobuf2 queue\n");
+	if (rc)
 		goto err_free;
-	}
 
 	rc = v4l2_ctrl_handler_init(&smi2021->ctrl_handler, 0);
-	if (rc < 0) {
-		dev_err(dev, "could not initialize v4l2 ctrl handler\n");
+	if (rc)
 		goto err_vb2;
-	}
 
 	smi2021->v4l2_dev.release = smi2021_release;
 	smi2021->v4l2_dev.ctrl_handler = &smi2021->ctrl_handler;
-	rc = v4l2_device_register(dev, &smi2021->v4l2_dev);
-	if (rc < 0) {
-		dev_err(dev, "could not register v4l2 device\n");
+	rc = v4l2_device_register(smi2021->dev, &smi2021->v4l2_dev);
+	if (rc)
 		goto err_ctrl;
-	}
 
 	/* From here on smi2021_release() tears everything down */
 
 	rc = smi2021_initialize(smi2021);
-	if (rc < 0) {
-		dev_err(dev, "could not initialize device\n");
-		goto err_v4l2;
+	if (rc) {
+		rc = dev_err_probe(smi2021->dev, rc,
+				   "failed to initialize device\n");
+		goto err_put;
 	}
 
 	smi2021->i2c_adap.owner = THIS_MODULE;
-	smi2021->i2c_adap.algo = &smi2021_algo;
-	smi2021->i2c_adap.algo_data = smi2021;
-	smi2021->i2c_adap.dev.parent = dev;
-	strscpy(smi2021->i2c_adap.name, SMI2021_DRIVER_NAME,
+	smi2021->i2c_adap.algo = &smi2021_i2c_algo;
+	smi2021->i2c_adap.dev.parent = smi2021->dev;
+	strscpy(smi2021->i2c_adap.name, KBUILD_MODNAME,
 		sizeof(smi2021->i2c_adap.name));
-	i2c_set_adapdata(&smi2021->i2c_adap, &smi2021->v4l2_dev);
+	i2c_set_adapdata(&smi2021->i2c_adap, smi2021);
 
 	rc = i2c_add_adapter(&smi2021->i2c_adap);
-	if (rc < 0) {
-		dev_err(dev, "could not add i2c adapter\n");
-		goto err_v4l2;
-	}
+	if (rc)
+		goto err_put;
 
-	/*
-	 * These devices ship with either a saa7113 or its gm7113c clone, so
-	 * let the decoder driver identify the chip itself. The overrides
-	 * below describe what the smi2021 bridge expects from the decoder's
-	 * BT.656 output: the field flag in the timing reference codes has to
-	 * be derived from VREF rather than from the data type.
-	 */
-	smi2021->decoder_r10_ofts = SAA7113_OFTS_VFLAG_BY_VREF;
-	smi2021->decoder_r10_vrln = true;
-	smi2021->decoder_r13_adlsb = true;
-	smi2021->decoder_pdata.saa7113_r10_ofts = &smi2021->decoder_r10_ofts;
-	smi2021->decoder_pdata.saa7113_r10_vrln = &smi2021->decoder_r10_vrln;
-	smi2021->decoder_pdata.saa7113_r13_adlsb = &smi2021->decoder_r13_adlsb;
-
-	decoder_info.addr = SMI2021_DECODER_I2C_ADDR;
-	decoder_info.platform_data = &smi2021->decoder_pdata;
-	strscpy(decoder_info.type, "saa7115_auto", sizeof(decoder_info.type));
-
+	/* The saa7115 driver tells a saa7113 from its gm7113c clone itself */
 	smi2021->decoder = v4l2_i2c_new_subdev_board(&smi2021->v4l2_dev,
 						     &smi2021->i2c_adap,
 						     &decoder_info, NULL);
 	if (!smi2021->decoder) {
-		dev_err(dev, "could not register the video decoder\n");
-		rc = -ENODEV;
-		goto err_v4l2;
+		rc = dev_err_probe(smi2021->dev, -ENODEV,
+				   "failed to register the video decoder\n");
+		goto err_put;
 	}
 
 	v4l2_subdev_call(smi2021->decoder, video, s_std, smi2021->cur_norm);
 	v4l2_subdev_call(smi2021->decoder, video, s_routing,
-			 smi2021->vid_inputs[smi2021->cur_input].type, 0, 0);
+			 board->inputs[smi2021->cur_input].type, 0, 0);
+
+	/*
+	 * Audio arrives in the same URBs as the video, so set up the audio
+	 * device before streaming can start.
+	 */
+	rc = smi2021_snd_register(smi2021);
+	if (rc)
+		dev_warn(smi2021->dev, "failed to register audio device: %pe\n",
+			 ERR_PTR(rc));
+
+	rc = smi2021_video_register(smi2021);
+	if (rc) {
+		rc = dev_err_probe(smi2021->dev, rc,
+				   "failed to register video device\n");
+		goto err_snd;
+	}
 
 	usb_set_intfdata(intf, smi2021);
 
-	rc = smi2021_video_register(smi2021);
-	if (rc < 0) {
-		dev_err(dev, "could not register video device\n");
-		goto err_intfdata;
-	}
-
-	rc = smi2021_snd_register(smi2021);
-	if (rc < 0)
-		dev_warn(dev, "could not register audio device (%d)\n", rc);
-
 	return 0;
 
-err_intfdata:
-	usb_set_intfdata(intf, NULL);
-err_v4l2:
+err_snd:
+	smi2021_snd_unregister(smi2021);
+err_put:
 	v4l2_device_put(&smi2021->v4l2_dev);
 
 	return rc;
@@ -1010,6 +833,7 @@ err_ctrl:
 err_vb2:
 	vb2_queue_release(&smi2021->vb_vidq);
 err_free:
+	mutex_destroy(&smi2021->reg_lock);
 	mutex_destroy(&smi2021->v4l2_lock);
 	mutex_destroy(&smi2021->vb_queue_lock);
 	kfree(smi2021);
@@ -1021,47 +845,41 @@ static void smi2021_usb_disconnect(struct usb_interface *intf)
 {
 	struct smi2021 *smi2021 = usb_get_intfdata(intf);
 
+	/* Not set for a device in bootloader mode */
 	if (!smi2021)
 		return;
 
-	usb_set_intfdata(intf, NULL);
-
 	/*
-	 * Wait until all current v4l2 operations are finished before
-	 * tearing the hardware state down.
+	 * Wait for running ioctls to finish. Once the video device is
+	 * unregistered, no new ones can start.
 	 */
 	mutex_lock(&smi2021->vb_queue_lock);
 	mutex_lock(&smi2021->v4l2_lock);
 
-	/* This is the only place where the URBs are released */
-	smi2021_uninit_isoc(smi2021);
+	smi2021_kill_isoc(smi2021);
 	smi2021_clear_queue(smi2021, VB2_BUF_STATE_ERROR);
-
 	video_unregister_device(&smi2021->vdev);
 	v4l2_device_disconnect(&smi2021->v4l2_dev);
 
-	/* This way current users can detect that the device is gone */
+	/* No URB is running anymore, so no audio data can arrive either */
+	smi2021_snd_unregister(smi2021);
+
+	/* Tell smi2021_stop_streaming() that the device is gone */
 	smi2021->udev = NULL;
 
 	mutex_unlock(&smi2021->v4l2_lock);
 	mutex_unlock(&smi2021->vb_queue_lock);
 
-	smi2021_snd_unregister(smi2021);
-
-	/*
-	 * This calls smi2021_release() if it is the last reference,
-	 * otherwise the release is postponed until there are no users left.
-	 */
+	/* This calls smi2021_release() unless the device is still in use */
 	v4l2_device_put(&smi2021->v4l2_dev);
 }
 
 static struct usb_driver smi2021_usb_driver = {
-	.name = SMI2021_DRIVER_NAME,
+	.name = KBUILD_MODNAME,
 	.id_table = smi2021_usb_device_id_table,
 	.probe = smi2021_usb_probe,
 	.disconnect = smi2021_usb_disconnect,
 };
-
 module_usb_driver(smi2021_usb_driver);
 
 MODULE_AUTHOR("Jon Arne Jørgensen <jonjon.arnearne@gmail.com>");

@@ -16,13 +16,11 @@
 
 static const struct snd_pcm_hardware smi2021_pcm_hw = {
 	.info = SNDRV_PCM_INFO_BLOCK_TRANSFER |
-		SNDRV_PCM_INFO_INTERLEAVED    |
-		SNDRV_PCM_INFO_MMAP           |
-		SNDRV_PCM_INFO_MMAP_VALID     |
+		SNDRV_PCM_INFO_INTERLEAVED |
+		SNDRV_PCM_INFO_MMAP |
+		SNDRV_PCM_INFO_MMAP_VALID |
 		SNDRV_PCM_INFO_BATCH,
-
 	.formats = SNDRV_PCM_FMTBIT_S32_LE,
-
 	.rates = SNDRV_PCM_RATE_48000,
 	.rate_min = 48000,
 	.rate_max = 48000,
@@ -37,35 +35,25 @@ static const struct snd_pcm_hardware smi2021_pcm_hw = {
 
 static int smi2021_pcm_open(struct snd_pcm_substream *substream)
 {
-	struct smi2021 *smi2021 = snd_pcm_substream_chip(substream);
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	int rc;
 
-	rc = snd_pcm_hw_constraint_pow2(runtime, 0,
-					SNDRV_PCM_HW_PARAM_PERIODS);
-	if (rc < 0)
-		return rc;
-
-	rc = snd_pcm_hw_constraint_integer(runtime,
-					   SNDRV_PCM_HW_PARAM_PERIODS);
-	if (rc < 0)
-		return rc;
-
 	runtime->hw = smi2021_pcm_hw;
-	smi2021->pcm_substream = substream;
 
-	return 0;
+	rc = snd_pcm_hw_constraint_integer(runtime, SNDRV_PCM_HW_PARAM_PERIODS);
+	if (rc < 0)
+		return rc;
+
+	return snd_pcm_hw_constraint_pow2(runtime, 0,
+					  SNDRV_PCM_HW_PARAM_PERIODS);
 }
 
+/*
+ * The sound card is freed when it is closed, which may be after the driver
+ * state is gone, so this must not touch it. The stream was stopped before.
+ */
 static int smi2021_pcm_close(struct snd_pcm_substream *substream)
 {
-	struct smi2021 *smi2021 = snd_pcm_substream_chip(substream);
-
-	if (atomic_read(&smi2021->adev_capturing)) {
-		atomic_set(&smi2021->adev_capturing, 0);
-		schedule_work(&smi2021->adev_capture_trigger);
-	}
-
 	return 0;
 }
 
@@ -73,23 +61,22 @@ static int smi2021_pcm_prepare(struct snd_pcm_substream *substream)
 {
 	struct smi2021 *smi2021 = snd_pcm_substream_chip(substream);
 
-	smi2021->pcm_complete_samples = 0;
-	smi2021->pcm_read_offset = 0;
 	smi2021->pcm_write_ptr = 0;
+	smi2021->pcm_period_bytes = 0;
+	smi2021->pcm_read_offset = 0;
 
 	return 0;
 }
 
-static void capture_trigger(struct work_struct *work)
+static void smi2021_pcm_trigger_work(struct work_struct *work)
 {
 	struct smi2021 *smi2021 = container_of(work, struct smi2021,
-					       adev_capture_trigger);
+					       pcm_trigger_work);
 
-	smi2021_toggle_audio(smi2021,
-			     atomic_read(&smi2021->adev_capturing) != 0);
+	smi2021_toggle_audio(smi2021, atomic_read(&smi2021->pcm_capturing));
 }
 
-/* This callback is ATOMIC, it must not sleep */
+/* Called with the stream lock held, so this must not sleep */
 static int smi2021_pcm_trigger(struct snd_pcm_substream *substream, int cmd)
 {
 	struct smi2021 *smi2021 = snd_pcm_substream_chip(substream);
@@ -98,18 +85,18 @@ static int smi2021_pcm_trigger(struct snd_pcm_substream *substream, int cmd)
 	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
 	case SNDRV_PCM_TRIGGER_RESUME:
 	case SNDRV_PCM_TRIGGER_START:
-		atomic_set(&smi2021->adev_capturing, 1);
+		atomic_set(&smi2021->pcm_capturing, 1);
 		break;
 	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
 	case SNDRV_PCM_TRIGGER_SUSPEND:
 	case SNDRV_PCM_TRIGGER_STOP:
-		atomic_set(&smi2021->adev_capturing, 0);
+		atomic_set(&smi2021->pcm_capturing, 0);
 		break;
 	default:
 		return -EINVAL;
 	}
 
-	schedule_work(&smi2021->adev_capture_trigger);
+	schedule_work(&smi2021->pcm_trigger_work);
 
 	return 0;
 }
@@ -130,129 +117,94 @@ static const struct snd_pcm_ops smi2021_pcm_ops = {
 	.pointer = smi2021_pcm_pointer,
 };
 
-/*
- * Mark the partial frame at the head of the ring buffer as complete, so that
- * the next chunk of audio starts on a frame boundary.
- */
-static void smi2021_pcm_skip_partial(struct smi2021 *smi2021,
-				     struct snd_pcm_runtime *runtime,
-				     unsigned int stride)
+static void smi2021_pcm_advance(struct smi2021 *smi2021,
+				struct snd_pcm_runtime *runtime,
+				unsigned int bytes)
 {
-	unsigned long flags;
-
-	snd_pcm_stream_lock_irqsave(smi2021->pcm_substream, flags);
-
-	smi2021->pcm_write_ptr += stride - (smi2021->pcm_write_ptr % stride);
-	if (smi2021->pcm_write_ptr >= runtime->dma_bytes)
-		smi2021->pcm_write_ptr -= runtime->dma_bytes;
-
-	snd_pcm_stream_unlock_irqrestore(smi2021->pcm_substream, flags);
+	smi2021->pcm_write_ptr = (smi2021->pcm_write_ptr + bytes) %
+				 runtime->dma_bytes;
+	smi2021->pcm_period_bytes += bytes;
 }
 
-void smi2021_audio(struct smi2021 *smi2021, const u8 *data, unsigned int len)
+/*
+ * Copy the audio data of one chunk into the ring buffer. Called with the
+ * stream lock held. Returns whether a period has elapsed.
+ *
+ * The device sends 24 bit samples, each of them preceded by a 0x00 header
+ * byte. Use this to detect bytes that got lost, and in that case mark the
+ * partial frame at the head of the ring buffer as complete, so that the new
+ * data starts on a frame boundary.
+ */
+static bool smi2021_audio_copy(struct smi2021 *smi2021,
+			       struct snd_pcm_runtime *runtime,
+			       const u8 *data, unsigned int len)
 {
-	struct snd_pcm_runtime *runtime;
-	unsigned int new_offset = 0;
-	unsigned int stride, oldptr;
-	bool period_elapsed = false;
-	unsigned long flags;
-	int diff, samples;
-	u8 offset;
+	unsigned int stride = frames_to_bytes(runtime, 1);
+	unsigned int period = frames_to_bytes(runtime, runtime->period_size);
+	unsigned int ptr = smi2021->pcm_write_ptr;
+	unsigned int offset = smi2021->pcm_read_offset;
+	unsigned int skipped = 0;
 
-	if (!smi2021->udev)
-		return;
-
-	if (!atomic_read(&smi2021->adev_capturing))
-		return;
-
-	if (!smi2021->pcm_substream)
-		return;
-
-	runtime = smi2021->pcm_substream->runtime;
-	if (!runtime || !runtime->dma_area)
-		return;
-
-	stride = runtime->frame_bits >> 3;
-	if (!stride)
-		return;
-
-	offset = smi2021->pcm_read_offset;
-	diff = smi2021->pcm_write_ptr;
-
-	/*
-	 * Check that the end of the last buffer was correct. If it was not,
-	 * mark any partial frame in the buffer as complete.
-	 */
-	if (smi2021->pcm_write_ptr > (unsigned int)offset + 4) {
-		unsigned int headptr = smi2021->pcm_write_ptr - offset - 4;
-
-		if (runtime->dma_area[headptr] != 0x00) {
-			smi2021_pcm_skip_partial(smi2021, runtime, stride);
-			smi2021->pcm_read_offset = 0;
-			offset = 0;
-		}
+	/* Check that the previous chunk ended with a complete sample */
+	if (ptr > offset + 4 && runtime->dma_area[ptr - offset - 4]) {
+		smi2021_pcm_advance(smi2021, runtime, stride - ptr % stride);
+		offset = 0;
 	}
 
-	/*
-	 * The device sends 24 bit PCM data with 0x00 as the header byte
-	 * before each sample. Look for that byte to make sure no bytes were
-	 * lost during the transfer.
-	 */
-	while (len > stride && (data[offset] != 0x00 ||
-				data[offset + (stride / 2)] != 0x00)) {
-		new_offset++;
+	while (len > stride && (data[offset] || data[offset + stride / 2])) {
+		skipped++;
 		data++;
 		len--;
 	}
 
 	if (len <= stride) {
-		/* The buffer was exhausted while looking for 0x00 */
+		/* No header byte found in this chunk */
 		smi2021->pcm_read_offset = 0;
+		return false;
+	}
+
+	if (skipped) {
+		smi2021_pcm_advance(smi2021, runtime,
+				    stride - smi2021->pcm_write_ptr % stride);
+		offset = skipped % (stride / 2);
+	}
+
+	smi2021->pcm_read_offset = offset;
+
+	while (len) {
+		unsigned int n = min(len, runtime->dma_bytes -
+					  smi2021->pcm_write_ptr);
+
+		memcpy(runtime->dma_area + smi2021->pcm_write_ptr, data, n);
+		smi2021_pcm_advance(smi2021, runtime, n);
+		data += n;
+		len -= n;
+	}
+
+	if (smi2021->pcm_period_bytes < period)
+		return false;
+
+	smi2021->pcm_period_bytes %= period;
+
+	return true;
+}
+
+void smi2021_audio(struct smi2021 *smi2021, const u8 *data, unsigned int len)
+{
+	struct snd_pcm_substream *substream = smi2021->pcm_substream;
+
+	if (!substream)
 		return;
-	}
 
-	if (new_offset) {
-		/*
-		 * This buffer can not be appended to the current one, so mark
-		 * any partial frame in the buffer as complete.
-		 */
-		smi2021_pcm_skip_partial(smi2021, runtime, stride);
-		smi2021->pcm_read_offset = new_offset % (stride / 2);
-		offset = smi2021->pcm_read_offset;
-	}
+	/*
+	 * pcm_capturing only changes in the trigger callback, which runs with
+	 * the stream lock held, so the runtime is valid while it is set.
+	 */
+	guard(pcm_stream_lock_irqsave)(substream);
 
-	oldptr = smi2021->pcm_write_ptr;
-	if (oldptr + len >= runtime->dma_bytes) {
-		unsigned int cnt = runtime->dma_bytes - oldptr;
-
-		memcpy(runtime->dma_area + oldptr, data, cnt);
-		memcpy(runtime->dma_area, data + cnt, len - cnt);
-	} else {
-		memcpy(runtime->dma_area + oldptr, data, len);
-	}
-
-	snd_pcm_stream_lock_irqsave(smi2021->pcm_substream, flags);
-
-	smi2021->pcm_write_ptr += len;
-	if (smi2021->pcm_write_ptr >= runtime->dma_bytes)
-		smi2021->pcm_write_ptr -= runtime->dma_bytes;
-
-	samples = smi2021->pcm_write_ptr - diff;
-	if (samples < 0)
-		samples += runtime->dma_bytes;
-
-	samples /= (stride / 2);
-
-	smi2021->pcm_complete_samples += samples;
-	if (smi2021->pcm_complete_samples / 2 >= runtime->period_size) {
-		smi2021->pcm_complete_samples -= runtime->period_size * 2;
-		period_elapsed = true;
-	}
-
-	snd_pcm_stream_unlock_irqrestore(smi2021->pcm_substream, flags);
-
-	if (period_elapsed)
-		snd_pcm_period_elapsed(smi2021->pcm_substream);
+	if (atomic_read(&smi2021->pcm_capturing) &&
+	    smi2021_audio_copy(smi2021, substream->runtime, data, len))
+		snd_pcm_period_elapsed_under_stream_lock(substream);
 }
 
 int smi2021_snd_register(struct smi2021 *smi2021)
@@ -261,33 +213,36 @@ int smi2021_snd_register(struct smi2021 *smi2021)
 	struct snd_pcm *pcm;
 	int rc;
 
-	INIT_WORK(&smi2021->adev_capture_trigger, capture_trigger);
+	INIT_WORK(&smi2021->pcm_trigger_work, smi2021_pcm_trigger_work);
 
 	rc = snd_card_new(smi2021->dev, SNDRV_DEFAULT_IDX1, SNDRV_DEFAULT_STR1,
 			  THIS_MODULE, 0, &card);
-	if (rc < 0)
+	if (rc)
 		return rc;
 
-	rc = snd_pcm_new(card, "smi2021 Audio", 0, 0, 1, &pcm);
-	if (rc < 0)
+	strscpy(card->driver, KBUILD_MODNAME, sizeof(card->driver));
+	strscpy(card->shortname, "SMI2021", sizeof(card->shortname));
+	strscpy(card->longname, "Somagic SMI2021", sizeof(card->longname));
+
+	rc = snd_pcm_new(card, "SMI2021", 0, 0, 1, &pcm);
+	if (rc)
 		goto err_free_card;
 
-	snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_CAPTURE, &smi2021_pcm_ops);
-	snd_pcm_set_managed_buffer_all(pcm, SNDRV_DMA_TYPE_VMALLOC, NULL, 0, 0);
-
-	pcm->info_flags = 0;
 	pcm->private_data = smi2021;
-	strscpy(pcm->name, "Somagic smi2021 Capture", sizeof(pcm->name));
+	strscpy(pcm->name, "Somagic SMI2021 Capture", sizeof(pcm->name));
+	snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_CAPTURE, &smi2021_pcm_ops);
 
-	strscpy(card->driver, "smi2021-Audio", sizeof(card->driver));
-	strscpy(card->shortname, "smi2021 Audio", sizeof(card->shortname));
-	strscpy(card->longname, "Somagic smi2021 Audio", sizeof(card->longname));
+	rc = snd_pcm_set_managed_buffer_all(pcm, SNDRV_DMA_TYPE_VMALLOC, NULL,
+					    0, 0);
+	if (rc)
+		goto err_free_card;
 
 	rc = snd_card_register(card);
-	if (rc < 0)
+	if (rc)
 		goto err_free_card;
 
 	smi2021->snd_card = card;
+	smi2021->pcm_substream = pcm->streams[SNDRV_PCM_STREAM_CAPTURE].substream;
 
 	return 0;
 
@@ -303,12 +258,12 @@ void smi2021_snd_unregister(struct smi2021 *smi2021)
 		return;
 
 	/*
-	 * Disconnect first, so that the pcm callbacks stop running and the
-	 * trigger work can not be scheduled again.
+	 * This stops the stream and prevents any further pcm callback except
+	 * for close, without waiting for userspace to close the device.
 	 */
-	snd_card_disconnect(smi2021->snd_card);
-	cancel_work_sync(&smi2021->adev_capture_trigger);
+	snd_card_free_when_closed(smi2021->snd_card);
+	cancel_work_sync(&smi2021->pcm_trigger_work);
 
-	snd_card_free(smi2021->snd_card);
 	smi2021->snd_card = NULL;
+	smi2021->pcm_substream = NULL;
 }

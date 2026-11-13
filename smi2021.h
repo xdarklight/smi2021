@@ -12,6 +12,7 @@
 #ifndef SMI2021_H
 #define SMI2021_H
 
+#include <linux/atomic.h>
 #include <linux/i2c.h>
 #include <linux/list.h>
 #include <linux/mutex.h>
@@ -20,7 +21,6 @@
 #include <linux/usb.h>
 #include <linux/workqueue.h>
 
-#include <media/i2c/saa7115.h>
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-device.h>
 #include <media/videobuf2-v4l2.h>
@@ -28,43 +28,26 @@
 #include <sound/core.h>
 #include <sound/pcm.h>
 
-/* Number of isochronous URBs and of packets per URB */
 #define SMI2021_ISOC_TRANSFERS		16
-#define SMI2021_ISOC_PACKETS		10
 
-/* Vendor specific USB control request used for all register access */
-#define SMI2021_USB_REQUEST		0x01
-#define SMI2021_USB_INDEX		0x00
+/* Head byte of the request that reads the hardware state or sets the mode */
+#define SMI2021_HW_STATE_HEAD		0x01
 
-/* The device splits the isochronous stream into chunks of this size */
-#define SMI2021_CHUNK_SIZE		0x400
-
-/* General video constants */
 #define SMI2021_BYTES_PER_LINE		1440
 #define SMI2021_PAL_LINES		576
 #define SMI2021_NTSC_LINES		480
 
-/* ITU-R BT.656 timing reference codes, see the saa7113 datasheet */
-#define SMI2021_TRC_EAV			0x10
-#define SMI2021_TRC_VBI			0x20
-#define SMI2021_TRC_FIELD_2		0x40
-#define SMI2021_TRC			0x80
-
-/* Struct passed over USB during firmware upload */
-struct smi2021_set_hw_state {
+struct smi2021_hw_state {
 	u8 head;
 	u8 state;
 } __packed;
 
-/* A single videobuf2 frame buffer */
 struct smi2021_buf {
 	/* Common vb2 stuff, must be first */
 	struct vb2_v4l2_buffer		vb;
 	struct list_head		list;
 
 	void				*mem;
-	unsigned int			length;
-
 	/* Set once the device has started sending the second field */
 	bool				second_field;
 	/* Set while the device is sending blanking instead of video */
@@ -73,28 +56,25 @@ struct smi2021_buf {
 	unsigned int			pos;
 };
 
-struct smi2021_vid_input {
+struct smi2021_input {
 	const char			*name;
-	int				type;
+	u32				type;
 };
 
-/* State of the BT.656 timing reference code scanner */
-enum smi2021_sync {
-	HSYNC,
-	SYNCZ1,
-	SYNCZ2,
-	TRC,
+struct smi2021_board {
+	const struct smi2021_input	*inputs;
+	unsigned int			num_inputs;
 };
 
 struct smi2021 {
 	struct device			*dev;
 	struct usb_device		*udev;
+	const struct smi2021_board	*board;
+
+	/* Serializes register accesses, some of which take several requests */
+	struct mutex			reg_lock;
 
 	struct i2c_adapter		i2c_adap;
-	struct saa7115_platform_data	decoder_pdata;
-	enum saa7113_r10_ofts		decoder_r10_ofts;
-	bool				decoder_r10_vrln;
-	bool				decoder_r13_adlsb;
 	struct v4l2_subdev		*decoder;
 
 	struct v4l2_ctrl_handler	ctrl_handler;
@@ -102,52 +82,56 @@ struct smi2021 {
 	struct video_device		vdev;
 	struct vb2_queue		vb_vidq;
 
-	/* Protects the v4l2 ioctls and all hardware access */
+	/* Protects the v4l2 ioctls */
 	struct mutex			v4l2_lock;
-	/* Protects the videobuf2 queue */
+	/* Protects the videobuf2 queue and the isochronous transfers */
 	struct mutex			vb_queue_lock;
 
-	/* Isochronous transfers */
-	unsigned int			iso_size;
+	u8				ifnum;
 	u8				isoc_ep;
+	unsigned int			iso_size;
 	unsigned int			num_urbs;
-	struct urb			**urbs;
+	struct urb			*urbs[SMI2021_ISOC_TRANSFERS];
 
-	/* Protects avail_bufs and cur_buf */
+	/* Protects avail_bufs */
 	spinlock_t			buf_lock;
 	struct list_head		avail_bufs;
-	struct smi2021_buf		*cur_buf;
 
+	/*
+	 * Only used by the URB completion handler while streaming, and with
+	 * the URBs stopped otherwise.
+	 */
+	struct smi2021_buf		*cur_buf;
+	/* Number of bytes of the 0xff 0x00 0x00 code prefix seen so far */
+	u8				trc_prefix_len;
+	bool				last_field2;
 	u32				sequence;
 
-	/* Frame settings */
 	unsigned int			cur_height;
 	v4l2_std_id			cur_norm;
-	enum smi2021_sync		sync_state;
-
-	/* Device settings */
-	unsigned int			vid_input_count;
-	const struct smi2021_vid_input	*vid_inputs;
 	unsigned int			cur_input;
 
-	/* Audio */
 	struct snd_card			*snd_card;
 	struct snd_pcm_substream	*pcm_substream;
 	unsigned int			pcm_write_ptr;
-	unsigned int			pcm_complete_samples;
+	unsigned int			pcm_period_bytes;
 	u8				pcm_read_offset;
-	struct work_struct		adev_capture_trigger;
-	atomic_t			adev_capturing;
+	/* Only changed by the trigger callback, under the stream lock */
+	atomic_t			pcm_capturing;
+	struct work_struct		pcm_trigger_work;
 };
 
 /* Provided by smi2021_bootloader.c */
-int smi2021_bootloader_probe(struct usb_interface *intf,
-			     const struct usb_device_id *devid);
+int smi2021_bootloader_probe(struct usb_interface *intf);
 
 /* Provided by smi2021_main.c */
+int smi2021_ctrl_write(struct usb_device *udev, u16 value, const void *data,
+		       u16 size);
+int smi2021_ctrl_read(struct usb_device *udev, u16 value, void *data,
+		      u16 size);
 void smi2021_toggle_audio(struct smi2021 *smi2021, bool enable);
-int smi2021_start(struct smi2021 *smi2021);
-void smi2021_stop(struct smi2021 *smi2021);
+int smi2021_start_streaming(struct vb2_queue *vq, unsigned int count);
+void smi2021_stop_streaming(struct vb2_queue *vq);
 
 /* Provided by smi2021_v4l2.c */
 int smi2021_vb2_setup(struct smi2021 *smi2021);

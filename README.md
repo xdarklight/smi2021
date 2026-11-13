@@ -34,19 +34,22 @@ v4l2-ctl -d /dev/video0 --list-inputs
 ### In a kernel tree
 
 Copy `*.c`, `*.h`, `Kconfig` and `Makefile` into
-`drivers/media/usb/smi2021/`, then add to `drivers/media/usb/Kconfig`:
+`drivers/media/usb/smi2021/`. Then add this to the "Analog TV USB devices"
+block of `drivers/media/usb/Kconfig`, between pvrusb2 and stk1160:
 
 ```
 source "drivers/media/usb/smi2021/Kconfig"
 ```
 
-and to `drivers/media/usb/Makefile`:
+and this to `drivers/media/usb/Makefile`, between `CONFIG_VIDEO_PVRUSB2` and
+`CONFIG_VIDEO_STK1160`:
 
 ```
 obj-$(CONFIG_VIDEO_SMI2021) += smi2021/
 ```
 
-Enable `CONFIG_VIDEO_SMI2021` and build as usual.
+Enable `CONFIG_MEDIA_ANALOG_TV_SUPPORT` and `CONFIG_VIDEO_SMI2021`, then build
+as usual.
 
 ### Out of tree
 
@@ -81,7 +84,8 @@ Because the driver is not in mainline yet, the upstream posting is a single
 "add new driver" patch, as was requested during the
 [2013 review](https://lkml.iu.edu/hypermail/linux/kernel/1303.1/03761.html)
 of the original submission. In addition to the files here it needs the two
-hunks shown under "In a kernel tree" above, and a `MAINTAINERS` entry:
+hunks shown under "In a kernel tree" above, and a `MAINTAINERS` entry
+between "SOLIDRUN CUBOX-I/HUMMINGBOARD SUPPORT" and "SONIC NETWORK DRIVER":
 
 ```
 SOMAGIC SMI2021 VIDEO CAPTURE DRIVER
@@ -105,8 +109,10 @@ Still to do before posting:
 ## Testing without hardware
 
 `tools/parser-test/` builds a userspace harness that feeds synthetic
-ITU-R BT.656 streams through the driver's frame parser, extracted verbatim
-from `smi2021_main.c`, and checks the resulting frame byte for byte:
+ITU-R BT.656 streams through the driver's frame parser and buffer handling,
+extracted verbatim from `smi2021_main.c`, and checks the resulting frames
+byte for byte, including the 242 active lines per field that the decoder
+sends for NTSC:
 
 ```bash
 make -C tools/parser-test check
