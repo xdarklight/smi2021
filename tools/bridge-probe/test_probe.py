@@ -35,6 +35,9 @@ class FakeTransport:
     def __init__(self, pid=0x003c, latency=0.0):
         self.pid = pid
         self.latency = latency
+        # Seconds the device sees time in steps of: a register is read in
+        # the microframe that carries the request, 125 us on real hardware
+        self.frame = 0.0
         self.mem = bytearray(0x10000)
         self.mem[0x60:0x70] = bytes(range(16))
         self.mode = 3
@@ -46,6 +49,9 @@ class FakeTransport:
         # 7 bit address -> registers, per bus
         self.devices = [{0x25: bytearray(range(256))}, {}]
         self.pointer = [0, 0]
+        # A command with bit 7 clear froze an engine of the real device:
+        # from then on transfers did nothing and reported no failure
+        self.frozen = [False, False]
         self.uploaded = bytearray()
         self.started = False
         self.unsafe_reads = []
@@ -143,8 +149,10 @@ class FakeTransport:
         cs = self.mem[0x53] & 7
         if not cs:
             return self.timer_base
-        ticks = (time.monotonic() - self.timer_start) * FCPU / \
-            ATMEGA103_DIV[cs]
+        now = time.monotonic()
+        if self.frame:
+            now -= now % self.frame
+        ticks = (now - self.timer_start) * FCPU / ATMEGA103_DIV[cs]
         return (self.timer_base + int(ticks)) & 0xff
 
     def _read_mem(self, addr):
@@ -200,6 +208,11 @@ class FakeTransport:
         if cmd & 0xc0 == 0xc0:
             assert naddr == 1, 'the firmware stalls this'
         bus = 1 if flags & br.FLAG_BUS1 else 0
+        if not cmd & 0x80:
+            self.frozen[bus] = True
+        if self.frozen[bus]:
+            self.saved = bytes([i2c_addr, cmd & ~1, flags, size])
+            return
         dev = self.devices[bus].get(i2c_addr >> 1)
         sub = payload[:naddr]
         if cmd & br.CMD_READ:
@@ -335,6 +348,25 @@ class ExperimentTest(unittest.TestCase):
         self.assertGreater(tables['ATmega16']['worst_error'], 0.5)
         self.assertEqual(self.t.mem[0x53], 0)
 
+    def test_timer_at_usb_speed(self):
+        # A register read takes about 0.8 ms on real hardware, so the
+        # faster settings wrap between samples and must not be trusted.
+        # The samples fall on microframes, which makes the steps of a
+        # wrapping counter regular enough to pass for a slower rate.
+        self.t.latency = 0.0003
+        self.t.frame = 0.000125
+        res = self.run_exp('timer', seconds=0.5)
+        rates = res.data['rates']
+        for cs in (1, 2, 3, 4, 5):
+            self.assertFalse(rates[cs]['trusted'], cs)
+        for cs in (6, 7):
+            self.assertTrue(rates[cs]['trusted'], cs)
+        tables = res.data['tables']
+        self.assertAlmostEqual(tables['ATmega103']['fcpu'], FCPU,
+                               delta=FCPU * 0.03)
+        self.assertLess(tables['ATmega103']['worst_error'], 0.05)
+        self.assertGreater(tables['ATmega16']['worst_error'], 0.5)
+
     def test_survey(self):
         image = (probe.FIRMWARE_DIR / 'smi2021_3c.bin').read_bytes()
         self.t.mem[0x8000:0x8000 + len(image)] = image
@@ -362,6 +394,25 @@ class ExperimentTest(unittest.TestCase):
                          I2C_BUFFER)
         self.assertEqual(res.data['scan'], {0: [0x25], 1: [0x50]})
         self.assertIn('0xe0', res.data['commands'])
+
+    def test_breadcrumb_stays_after_a_failure(self):
+        res = probe.Results('survey', self.tmp.name)
+        res.crumb('survey pass 1 read 0x1000+30')
+        res.close(failed=TimeoutError('no reply'))
+        crumb = pathlib.Path(self.tmp.name) / 'breadcrumb'
+        self.assertIn('read 0x1000+30', crumb.read_text())
+        self.assertIn('TimeoutError', res.data['failed'])
+
+    def test_i2c_command_that_freezes_the_engine(self):
+        cmds = probe.I2C_READ_CMDS
+        probe.I2C_READ_CMDS = (0xa0, 0x20, 0xe4)
+        try:
+            res = self.run_exp('i2c', buffer_end=0x24, commands=True,
+                               decoder=0x25)
+        finally:
+            probe.I2C_READ_CMDS = cmds
+        self.assertEqual(res.data['stopped_after'], '0x20')
+        self.assertNotIn('0xe4', res.data['commands'])
 
     def test_endpoints(self):
         res = self.run_exp('endpoints', seconds=0.1,

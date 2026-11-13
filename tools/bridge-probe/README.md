@@ -7,10 +7,11 @@ bridge, run i2c transfers and switch modes, and that is enough to answer
 most of the open questions about the hardware. Experiments 8 to 11 need a
 test firmware and are not covered here.
 
-> These scripts have not been run against hardware yet. `test_probe.py`
-> runs every experiment against an emulation of the documented firmware,
-> which shows that they work and draw the right conclusions for such a
-> device, but not how the real one answers.
+> The experiments ran on an EasyCAP 002 with firmware 3c in November 2026;
+> what they found is in [`docs/hardware.md`](../../docs/hardware.md).
+> `test_probe.py` runs every experiment against an emulation of the
+> documented firmware, which now includes the two ways the real device
+> wedged during that run.
 
 ## Setup
 
@@ -47,10 +48,23 @@ what is known to have side effects:
   external memory, the watchdog and the clock.
 
 Reading unknown registers can still have side effects, which is the point
-of finding out. Before each step, the experiments write a breadcrumb to
+of finding out, and on the real device it is worse than that:
+
+- Reading an address that nothing answers stops the firmware until the
+  device is unplugged; control requests time out from then on. That was
+  the first read of 0x1000, and a read of 30 bytes from 0x1600, while the
+  single registers at 0x1600 and 0x1605 read fine. So even the blocks of
+  known registers are not decoded throughout.
+- An i2c command with bit 7 clear (0x20, 0x60) froze the first engine until
+  the device was unplugged: its registers no longer took writes, and every
+  transfer "succeeded" with stale data, so a scan found a device at every
+  address.
+
+Before each step, the experiments write a breadcrumb to
 `results/breadcrumb` and sync it, as `run-tests.sh` does, so after a wedged
 device or board it tells which step it was. The breadcrumb is removed when
-an experiment completes. A wedged device needs a replug.
+an experiment completes, and kept when it fails. A wedged device needs a
+replug.
 
 Every experiment writes `summary.txt`, `data.json` and its raw data to a
 directory of its own in `results/`.
@@ -62,20 +76,23 @@ In this order, from the least to the most likely to upset the device:
     ./probe.py info
     ./probe.py exp timer
     ./probe.py exp avr
-    ./probe.py exp i2c --commands
+    ./probe.py exp i2c --buffer-end 0x3f
     ./probe.py exp modes
     ./probe.py exp endpoints
-    ./probe.py exp survey --range 0x1000-0x14ff
-    ./probe.py exp survey --range 0x1580-0x3fff
-    ./probe.py exp survey --range 0x4000-0xffff
+    ./probe.py exp i2c --commands
+
+The survey is left out: see below.
 
 ### 1. `exp timer`: CPU clock and Timer0 prescaler
 
 Runs Timer0 with each clock select value for a few seconds and samples
 `TCNT0`. A rate is only used where the samples are close enough to unwrap
-the 8 bit counter, which at a sample every half millisecond leaves the
-slow settings. The summary compares the rates with the prescaler of the
-ATmega103 and of the ATmega16.
+the 8 bit counter, which at a sample every 0.8 ms or so leaves the slow
+settings. The host reads in steps of USB microframes, which makes the steps
+of a counter that wraps between samples regular enough to pass for a slower
+rate; so each setting is sampled again about a microframe slower, and a
+rate that moves with the interval is an alias. The summary compares the
+rates with the prescaler of the ATmega103 and of the ATmega16.
 
 Expected: the ATmega103 table fits with a deviation of a few percent at
 most, and gives a CPU clock of about 30 MHz. If the ATmega16 table fits
@@ -93,6 +110,11 @@ program memory or the bootloader is visible in the data space.
 `--write-test RANGE` also flips and restores every byte of a range, to find
 memory. Only use it on ranges the first passes showed to be quiet.
 
+Don't run it on unknown ranges of a real device: a read of an address that
+nothing answers stops the firmware, see [Safety](#safety). Of the blocks
+around the known registers, 0x1580–0x15bf read fine and 0x1600–0x163f did
+not.
+
 ### 3. `exp avr`: other ATmega103 peripherals
 
 Dumps the I/O registers 0x20 to 0x5f, then writes and restores those of the
@@ -108,14 +130,19 @@ likely that the SPI controller Somagic advertises is the ATmega103's;
 Writes a pattern into the data buffer of both i2c engines, from +5 up to
 `--buffer-end` (default +0x24, 32 bytes), reads it back and restores it.
 The number of bytes that keep the pattern is the size of the buffer, if it
-is smaller; if all 32 do, repeat with `--buffer-end 0x3f`.
+is smaller; if all 32 do, repeat with `--buffer-end 0x3f`. On the real
+device it is 32, and +0x25 to +0x29 are registers.
 
 Then reads one byte with command 0xa0 from every address on both buses.
 Expected on bus 0: the decoder at 0x25; whatever answers on bus 1 is new.
 
 `--commands` also tries the read commands in `I2C_READ_CMDS` on register 0
 of the decoder, next to the reference read with 0xe0, to learn what bits 2,
-4, 6 and 7 of a command do.
+4 and 6 of a command do. Commands with bit 7 clear are left out, as they
+froze the engine. After each command the decoder must still read as before
+and an address without a device must still fail, or the experiment stops
+there: the engine then needs a replug, and the later results would be
+meaningless.
 
 ### 5. `exp endpoints`: endpoint register blocks
 

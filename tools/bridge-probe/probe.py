@@ -83,7 +83,10 @@ ENDPOINT_VARIANTS = {
 
 MODE_RUNS = [(2, 1), (2, 2), (5, 2), (3, 1), (3, 2), (4, 1), (4, 2)]
 
-I2C_READ_CMDS = (0xa0, 0xe0, 0x20, 0x60, 0xa4, 0xe4, 0xb0, 0xf0)
+# Commands with bit 7 clear are left out: 0x20 and 0x60 froze the first
+# engine of a real device until it was unplugged, with its registers no
+# longer taking writes and every transfer "succeeding" with stale data.
+I2C_READ_CMDS = (0xa0, 0xe0, 0xa4, 0xe4, 0xb0, 0xf0)
 
 
 # -- results ----------------------------------------------------------------
@@ -117,12 +120,16 @@ class Results:
     def path(self, name):
         return self.dir / name
 
-    def close(self):
+    def close(self, failed=None):
+        """Save the results; the breadcrumb stays when the step failed."""
+        if failed is not None:
+            self.say(f'failed: {failed!r}')
+            self.data['failed'] = repr(failed)
         with open(self.dir / 'data.json', 'w', encoding='utf-8') as f:
             json.dump(self.data, f, indent=1, sort_keys=True)
         self.summary.close()
         crumb = self.base / 'breadcrumb'
-        if crumb.exists():
+        if failed is None and crumb.exists():
             crumb.unlink()
 
 
@@ -263,21 +270,48 @@ def exp_timer(bridge, res, args):
         bridge.write8(tccr, 0)
         bridge.write8(tcnt, 0)
         bridge.write8(tccr, cs)
-        samples = []
-        end = time.monotonic() + args.seconds
-        while time.monotonic() < end:
-            value = bridge.read8(tcnt)
-            samples.append((time.monotonic(), value))
+        # The host reads in steps of USB microframes, which makes the steps
+        # of a counter that wraps between samples regular enough to pass
+        # for a slower rate. Such an alias moves with the sample interval,
+        # so sample again about a microframe slower and trust only what
+        # agrees. Spin rather than sleep, which overshoots by as much.
+        runs = []
+        pause = 0.0
+        for _ in range(2):
+            samples = []
+            end = time.monotonic() + args.seconds / 2
+            while time.monotonic() < end:
+                value = bridge.read8(tcnt)
+                samples.append((time.monotonic(), value))
+                until = time.monotonic() + pause
+                while time.monotonic() < until:
+                    pass
+            rate, used, interval = timer_rate(samples)
+            ok = used >= 0.5 * (len(samples) - 1) and used >= 50
+            runs.append((rate, used, interval, len(samples), ok))
+            pause = 0.15 * interval
         bridge.write8(tccr, 0)
-        rate, used, interval = timer_rate(samples)
-        trusted = used >= 0.5 * (len(samples) - 1) and used >= 50
+        (rate, used, interval, n, ok), slow = runs
+        # The slower run is only there to expose aliases, and may itself be
+        # too close to a wrap per sample to pass as usable
+        agree = abs(rate - slow[0]) <= 0.05 * max(rate, slow[0], 1.0)
+        trusted = ok and agree
+        if trusted:
+            rate = (rate + slow[0]) / 2
         rates[cs] = {'rate_hz': rate, 'trusted': trusted, 'pairs_used': used,
-                     'sample_interval_us': interval * 1e6,
-                     'samples': len(samples)}
-        res.say(f'clock select {cs}: {rate:12.1f} Hz '
-                f'({"ok" if trusted else "too fast to unwrap"}, '
-                f'{used} of {len(samples) - 1} sample pairs usable, a '
-                f'sample every {interval * 1e6:.0f} us)')
+                     'sample_interval_us': interval * 1e6, 'samples': n,
+                     'slow_rate_hz': slow[0],
+                     'slow_interval_us': slow[2] * 1e6}
+        if trusted:
+            verdict = 'ok'
+        elif ok:
+            verdict = 'an alias, moves with the interval'
+        else:
+            verdict = 'too fast to unwrap'
+        res.say(f'clock select {cs}: {rate:12.1f} Hz ({verdict}; '
+                f'{slow[0]:.1f} Hz at a sample every {slow[2] * 1e6:.0f} '
+                f'us, {used} of {n - 1} pairs usable at every '
+                f'{interval * 1e6:.0f} us)')
     bridge.write8(tccr, 0)
     bridge.write8(tcnt, saved[1])
     bridge.write8(tccr, saved[0])
@@ -475,6 +509,9 @@ def exp_i2c(bridge, res, args):
         res.say(f'bus {bus}: devices at '
                 f'{", ".join(f"0x{a:02x}" for a in found) or "none"} '
                 f'(7 bit addresses)')
+        if len(found) > 0x60:
+            res.say(f'  that is nearly every address: engine {bus} is not '
+                    'running transfers, and needs a replug')
         res.data.setdefault('scan', {})[bus] = found
     if args.commands:
         addr, reg = args.decoder, 0x00
@@ -482,6 +519,9 @@ def exp_i2c(bridge, res, args):
                for _ in range(5)]
         res.say(f'decoder 0x{addr:02x} register 0x{reg:02x} with 0xe0: '
                 f'{[(d.hex(), f) for d, f in ref]}')
+        good = [d for d, f in ref if not f]
+        absent = next((a for a in range(0x08, 0x78)
+                       if a not in res.data['scan'][0]), None)
         for cmd in I2C_READ_CMDS:
             res.crumb(f'i2c command 0x{cmd:02x}')
             sub = reg if cmd & 0xc0 != 0x80 else None
@@ -494,6 +534,18 @@ def exp_i2c(bridge, res, args):
             res.say(f'  0x{cmd:02x}: {[(d.hex(), f) for d, f in got]}')
             res.data.setdefault('commands', {})[f'0x{cmd:02x}'] = [
                 (d.hex(), f) for d, f in got]
+            # A command that stops the engine would make every later result
+            # meaningless: the decoder must still read as before, and an
+            # address without a device must still fail.
+            alive = any(bridge.i2c(addr, 0xe0, sub=reg, read_len=1) ==
+                        (good[0], False) for _ in range(4)) if good else True
+            if absent is not None:
+                alive &= bridge.i2c(absent, 0xe0, sub=reg, read_len=1)[1]
+            if not alive:
+                res.say(f'  the engine stopped working after 0x{cmd:02x}; '
+                        'the rest is left out, replug the device')
+                res.data['stopped_after'] = f'0x{cmd:02x}'
+                break
 
 
 def _usb_regs(bridge):
@@ -770,8 +822,10 @@ def run(args, transport):
             f'{datetime.datetime.now().isoformat()}')
     try:
         EXPERIMENTS[args.experiment](bridge, res, args)
-    finally:
-        res.close()
+    except BaseException as e:
+        res.close(failed=e)
+        raise
+    res.close()
     return res.dir
 
 
