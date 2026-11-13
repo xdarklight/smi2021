@@ -139,7 +139,6 @@ struct smi2021 {
 	struct snd_pcm_substream	*pcm_substream;
 	unsigned int			pcm_write_ptr;
 	unsigned int			pcm_period_bytes;
-	u8				pcm_read_offset;
 	/*
 	 * Whether the completion handler may write into the ring buffer.
 	 * Changed by the trigger callback, under the pcm stream lock that

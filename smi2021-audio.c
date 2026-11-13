@@ -82,7 +82,6 @@ static int smi2021_pcm_prepare(struct snd_pcm_substream *substream)
 
 	smi2021->pcm_write_ptr = 0;
 	smi2021->pcm_period_bytes = 0;
-	smi2021->pcm_read_offset = 0;
 
 	return 0;
 }
@@ -174,46 +173,36 @@ static void smi2021_pcm_align(struct smi2021 *smi2021,
  * Copy the audio data of one chunk into the ring buffer. Called with the pcm
  * stream lock held. Returns whether a period has elapsed.
  *
- * When bytes got lost, mark the partial frame at the head of the ring buffer
- * as complete, so that the new data starts on a frame boundary.
+ * The samples in the ring buffer start at multiples of the sample size, so
+ * the write pointer tells how many bytes of the last sample the chunk has to
+ * complete, and where in the chunk the header bytes of the following samples
+ * have to be. When they are not there, bytes got lost: mark the partial frame
+ * at the head of the ring buffer as complete, and start again on the frame
+ * boundary with the first two samples in a row whose header bytes are found.
  */
 static bool smi2021_copy_audio(struct smi2021 *smi2021,
 			       struct snd_pcm_runtime *runtime,
 			       const u8 *data, unsigned int len)
 {
-	unsigned int frame = SMI2021_AUDIO_FRAME_SIZE;
+	unsigned int sample = SMI2021_AUDIO_SAMPLE_SIZE;
 	unsigned int period = frames_to_bytes(runtime, runtime->period_size);
-	unsigned int ptr = smi2021->pcm_write_ptr;
-	unsigned int offset = smi2021->pcm_read_offset;
-	unsigned int skipped = 0;
+	unsigned int rest = (sample - smi2021->pcm_write_ptr % sample) % sample;
 
-	/* Check that the previous chunk ended with a complete sample */
-	if (ptr > offset + SMI2021_AUDIO_SAMPLE_SIZE &&
-	    runtime->dma_area[ptr - offset - SMI2021_AUDIO_SAMPLE_SIZE]) {
+	if (len <= rest + sample || data[rest] || data[rest + sample]) {
+		unsigned int skip;
+
+		for (skip = 0; skip + sample < len; skip++)
+			if (!data[skip] && !data[skip + sample])
+				break;
+
+		/* No header bytes found in this chunk */
+		if (skip + sample >= len)
+			return false;
+
 		smi2021_pcm_align(smi2021, runtime);
-		offset = 0;
+		data += skip;
+		len -= skip;
 	}
-
-	/* Find the header bytes of both samples of a frame */
-	while (len > frame &&
-	       (data[offset] || data[offset + SMI2021_AUDIO_SAMPLE_SIZE])) {
-		skipped++;
-		data++;
-		len--;
-	}
-
-	if (len <= frame) {
-		/* No header byte found in this chunk */
-		smi2021->pcm_read_offset = 0;
-		return false;
-	}
-
-	if (skipped) {
-		smi2021_pcm_align(smi2021, runtime);
-		offset = skipped % SMI2021_AUDIO_SAMPLE_SIZE;
-	}
-
-	smi2021->pcm_read_offset = offset;
 
 	while (len) {
 		unsigned int n = min(len, runtime->dma_bytes -

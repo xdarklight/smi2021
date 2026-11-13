@@ -36,7 +36,6 @@ static unsigned int frames_to_bytes(struct snd_pcm_runtime *r,
 struct smi2021 {
 	unsigned int pcm_write_ptr;
 	unsigned int pcm_period_bytes;
-	u8 pcm_read_offset;
 };
 
 #include "audio_extract.h"
@@ -144,10 +143,11 @@ static int test_clean(unsigned int buffer, unsigned int period)
 
 /*
  * After bytes got lost, the following data must be copied sample aligned
- * again: every complete sample in what gets written afterwards starts with
- * its 0x00 header byte at a multiple of the sample size.
+ * again: what gets written afterwards has the 0x00 header bytes of its
+ * samples at the multiples of the sample size, and nowhere else. The stream
+ * may have started inside a sample, which shifts the samples in every chunk.
  */
-static int test_resync(unsigned int lost)
+static int test_resync(unsigned int lost, unsigned int phase)
 {
 	unsigned int buffer = 64 * 1024, period = 4096;
 	unsigned long total = 0, pos, i;
@@ -161,7 +161,7 @@ static int test_resync(unsigned int lost)
 
 	for (i = 0; i < 40; i++) {
 		unsigned int len = CHUNK_DATA_SIZE;
-		unsigned long src = total;
+		unsigned long src = phase + total;
 
 		/* Chunk 10 loses its first bytes */
 		if (i == 10) {
@@ -177,11 +177,12 @@ static int test_resync(unsigned int lost)
 	}
 
 	/* Check what was written from chunk 11 on */
-	for (pos = start_ptr; pos != st.s.pcm_write_ptr; pos = (pos + 4) % buffer)
-		if (st.rt.dma_area[pos] != 0x00)
+	for (pos = start_ptr; pos != st.s.pcm_write_ptr; pos = (pos + 1) % buffer)
+		if ((st.rt.dma_area[pos] == 0x00) != (pos % 4 == 0))
 			bad++;
 
-	snprintf(name, sizeof(name), "resync after losing %u bytes", lost);
+	snprintf(name, sizeof(name), "resync after losing %u bytes, %u into a sample",
+		 lost, phase);
 	if (bad)
 		snprintf(detail, sizeof(detail), "%d misaligned samples", bad);
 	return report(name, !bad && guards_ok(&st), detail[0] ? detail : NULL);
@@ -252,9 +253,7 @@ static int test_fuzz(void)
 				chunk[j] = rand() % 4 ? stream_byte(i * 1020 + j)
 						      : rand();
 			smi2021_copy_audio(&st.s, &st.rt, chunk, len);
-			if (st.s.pcm_write_ptr >= buffer ||
-			    st.s.pcm_read_offset >= SMI2021_AUDIO_SAMPLE_SIZE ||
-			    !guards_ok(&st)) {
+			if (st.s.pcm_write_ptr >= buffer || !guards_ok(&st)) {
 				fail = 1;
 				break;
 			}
@@ -262,11 +261,12 @@ static int test_fuzz(void)
 	}
 
 	return report("random corruption, buffers 8 to 4000 bytes", !fail,
-		      fail ? "state out of range or guard overwritten" : NULL);
+		      fail ? "pointer out of range or guard overwritten" : NULL);
 }
 
 int main(void)
 {
+	unsigned int phase;
 	int fail = 0;
 
 	/* The driver's limits: 1024 to 128 KiB periods, up to 256 KiB */
@@ -277,12 +277,16 @@ int main(void)
 	/* Buffers smaller than one chunk, which the old limits allowed */
 	fail |= test_clean(992, 496);
 	fail |= test_clean(1016, 508);
-	fail |= test_resync(1);
-	fail |= test_resync(2);
-	fail |= test_resync(3);
-	fail |= test_resync(5);
+	for (phase = 0; phase < 4; phase++) {
+		fail |= test_resync(1, phase);
+		fail |= test_resync(2, phase);
+		fail |= test_resync(3, phase);
+		fail |= test_resync(5, phase);
+	}
 	fail |= test_packets(0, 0);
+	fail |= test_packets(1, 0);
 	fail |= test_packets(2, 0);
+	fail |= test_packets(3, 0);
 	fail |= test_packets(0, 20);
 	fail |= test_packets(2, 20);
 	fail |= test_fuzz();
