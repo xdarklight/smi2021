@@ -187,6 +187,51 @@ static int test_resync(unsigned int lost)
 	return report(name, !bad && guards_ok(&st), detail[0] ? detail : NULL);
 }
 
+/*
+ * A stream handed over in short pieces of different lengths, whose first
+ * piece need not start at a sample: it may start inside one, or with bytes
+ * that are no audio data at all. Everything from the first whole sample on
+ * must arrive byte for byte, sample aligned, and with nothing in front of it:
+ * the ring buffer still holds whatever an earlier capture left there.
+ */
+static int test_packets(unsigned int phase, unsigned int junk)
+{
+	static const unsigned int sizes[] = { 48, 48, 48, 96, 48, 56, 48, 64 };
+	unsigned int buffer = 64 * 1024, period = 1024;
+	unsigned long first = (phase + 3) / 4 * 4, src = phase, pos, i;
+	u8 packet[128];
+	struct setup st;
+	char name[64], detail[96] = "";
+	int bad = 0;
+
+	init(&st, buffer, period);
+	memset(st.rt.dma_area, 0x5a, buffer);
+
+	/* About 22 KiB, so that the ring buffer does not wrap */
+	for (i = 0; i < 400; i++) {
+		unsigned int len = sizes[i % 8], j = 0;
+
+		/* Leftovers that happen not to contain a single 0x00 byte */
+		for (; i == 0 && j < junk; j++)
+			packet[j] = 0x80 + j;
+		for (; j < len; j++)
+			packet[j] = stream_byte(src++);
+		smi2021_copy_audio(&st.s, &st.rt, packet, len);
+	}
+
+	for (pos = 0; pos < st.s.pcm_write_ptr; pos++)
+		if (st.rt.dma_area[pos] != stream_byte(first + pos))
+			bad++;
+
+	snprintf(name, sizeof(name), "packets, %u bytes into a sample, %u junk",
+		 phase, junk);
+	if (bad || st.s.pcm_write_ptr != src - first)
+		snprintf(detail, sizeof(detail), "bad %d, ptr %u want %lu", bad,
+			 st.s.pcm_write_ptr, src - first);
+	return report(name, !bad && st.s.pcm_write_ptr == src - first &&
+		      guards_ok(&st), detail[0] ? detail : NULL);
+}
+
 /* Random corruption must never make the code write outside the buffer */
 static int test_fuzz(void)
 {
@@ -236,6 +281,10 @@ int main(void)
 	fail |= test_resync(2);
 	fail |= test_resync(3);
 	fail |= test_resync(5);
+	fail |= test_packets(0, 0);
+	fail |= test_packets(2, 0);
+	fail |= test_packets(0, 20);
+	fail |= test_packets(2, 20);
 	fail |= test_fuzz();
 
 	printf("\n%s\n", fail ? "SOME TESTS FAILED" : "all audio tests passed");

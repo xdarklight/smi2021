@@ -159,6 +159,17 @@ static void smi2021_pcm_advance(struct smi2021 *smi2021,
 	smi2021->pcm_period_bytes += bytes;
 }
 
+/* Mark the partial frame at the head of the ring buffer, if any, as complete */
+static void smi2021_pcm_align(struct smi2021 *smi2021,
+			      struct snd_pcm_runtime *runtime)
+{
+	unsigned int partial = smi2021->pcm_write_ptr % SMI2021_AUDIO_FRAME_SIZE;
+
+	if (partial)
+		smi2021_pcm_advance(smi2021, runtime,
+				    SMI2021_AUDIO_FRAME_SIZE - partial);
+}
+
 /*
  * Copy the audio data of one chunk into the ring buffer. Called with the pcm
  * stream lock held. Returns whether a period has elapsed.
@@ -179,7 +190,7 @@ static bool smi2021_copy_audio(struct smi2021 *smi2021,
 	/* Check that the previous chunk ended with a complete sample */
 	if (ptr > offset + SMI2021_AUDIO_SAMPLE_SIZE &&
 	    runtime->dma_area[ptr - offset - SMI2021_AUDIO_SAMPLE_SIZE]) {
-		smi2021_pcm_advance(smi2021, runtime, frame - ptr % frame);
+		smi2021_pcm_align(smi2021, runtime);
 		offset = 0;
 	}
 
@@ -198,8 +209,7 @@ static bool smi2021_copy_audio(struct smi2021 *smi2021,
 	}
 
 	if (skipped) {
-		smi2021_pcm_advance(smi2021, runtime,
-				    frame - smi2021->pcm_write_ptr % frame);
+		smi2021_pcm_align(smi2021, runtime);
 		offset = skipped % SMI2021_AUDIO_SAMPLE_SIZE;
 	}
 
