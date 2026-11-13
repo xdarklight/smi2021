@@ -7,9 +7,10 @@
  * The cycle counts assume the instruction timing of the classic AVR core
  * (NOP, LDI, DEC 1 cycle; SBIW 2; BRNE 2 taken, 1 not taken).
  *
- * The instructions that the core may lack are emitted as raw opcodes with
- * .word, only in the functions of the instruction tests and in the ELPM
- * path of pm_read(); avr-as for avr3 would refuse their mnemonics.
+ * The instructions of the instruction tests are emitted as raw opcodes with
+ * .word, so that each test runs exactly the opcode it names; avr-as for the
+ * ATmega103 would refuse most of their mnemonics, as the ATmega103, like
+ * this core, lacks them (docs/hardware.md "CPU core").
  */
 
 #define SREG_IO		0x3f
@@ -24,22 +25,6 @@
 #define OP_ELPM_R18_ZP		0x9127	/* elpm r18, Z+ */
 
 	.text
-
-/*
- * void delay_160(uint16_t units): 160 cycles per unit, 200 units are the
- * 1.1 ms before the soft disconnect of docs/hardware.md "Startup"
- */
-	.global	delay_160
-delay_160:
-	sbiw	r24, 0
-	breq	3f
-1:	ldi	r18, 39		; 1
-2:	nop			; 1, and with the next two
-	dec	r18		; 1, 39 * 4 - 1 = 155
-	brne	2b		; 2
-	sbiw	r24, 1		; 2
-	brne	1b		; 2, 160 per unit
-3:	ret
 
 /*
  * void delay_1000(uint16_t units): exactly 1000 * units - 1 cycles from

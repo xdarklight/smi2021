@@ -15,8 +15,10 @@ with it unchanged, and adds test requests for the experiments 8 to 11 of
 
 ## Building
 
-Needs avr-gcc, binutils and nothing else; avr-libc is not used, not even
-its startup code.
+Needs avr-gcc, binutils and avr-libc, for the ATmega103: its startup code,
+its register headers, its interrupt macros and its delay loops. On Debian
+and Ubuntu that is `gcc-avr`, `binutils-avr` and `avr-libc`; on Arch Linux
+`avr-gcc`, `avr-binutils` and `avr-libc`.
 
     make                              # avr-gcc etc. from PATH
     make CROSS=/path/to/bin/avr-      # another toolchain
@@ -24,14 +26,13 @@ its startup code.
     make ALT0_STOP=0                  # alternate setting 0 stops nothing
     make IRQ=1                        # enable interrupts, see below
     make IRQ=1 ISR_EVENTS=0           # vector 11 only counts and logs
-    make IRQ=1 VECTORS=rjmp48         # 48 RJMP vectors, for the census
     make IRQ=1 ISR_BARE=1             # vector 11 is a bare RETI
     make IRQ=1 ISR_BARE=2             # vector 11 counts, reads no register
 
 `IRQ=0`, the default, never enables interrupts and polls the controller,
 as `docs/hardware.md` "Interrupt" advises; with interrupts enabled the
 firmware fails within a few control transfers, for reasons not yet known.
-`ISR_EVENTS`, `VECTORS` and `ISR_BARE` only matter for the interrupt test, see 0xf3
+`ISR_EVENTS` and `ISR_BARE` only matter for the interrupt test, see 0xf3
 and 0xf7 under [Test requests](#test-requests).
 
 The result is `build/opensmi21.bin`: a plain image from address 0, padded
@@ -54,7 +55,7 @@ unloaded:
 
 | File | Contents |
 |------|----------|
-| `crt0.S` | vector table, startup code, interrupt census stubs |
+| `isr.S` | handlers of the vectors other than 11, for the census, and the stack pointer at reset for the crash record |
 | `main.c` | bring-up and main loop |
 | `usb.c` | USB controller, control endpoint, standard requests, descriptors |
 | `vendor.c` | vendor requests: modes, streaming engines, register access, i2c |
@@ -68,10 +69,12 @@ unloaded:
 
 ## What is implemented
 
-- **Core**: built with `-mmcu=avr3`, the classic core with `JMP` and
-  `CALL`, without `MUL`, `MOVW`, `LPM Rd, Z` and `ELPM`. Own startup code:
-  24 vectors of one `JMP` each, `SP` = 0x0fff, `.bss` cleared, `.data`
-  copied with the `LPM` that loads `r0`, then `main()`. SRAM 0x0060–0x0fff.
+- **Core**: built with `-mmcu=atmega103` and avr-libc, as the core decodes
+  the ATmega103's instruction set (`docs/hardware.md` "CPU core").
+  avr-libc's startup code: 24 vectors of one `JMP` each, `SP` = 0x0fff,
+  `.data` copied with the plain `ELPM`, `.bss` cleared, then `main()`.
+  SRAM 0x0060–0x0fff; the linker script is the firmware's own, for the
+  info block at 0x0060 and the limits.
 - **Bring-up**: the sequence of `docs/hardware.md` "Startup": `DDRA` = 0xff,
   status of both i2c engines 0, mode 3 prepared (0x1580 = 0x03, 0x1880 = 0),
   the USB controller set up with the documented values, `PC0` driven low,
@@ -246,7 +249,7 @@ and decodes the reply, for example:
 | 11 | 1 | firmware version, minor (1) |
 | 12 | 2 | USB product id |
 | 14 | 2 | image size in bytes, without padding |
-| 16 | 1 | build options: bit 0 `ALT0_STOP`, bit 1 `IRQ`, bit 2 `ISR_EVENTS`, bit 3 `VECTORS=rjmp48`, bit 4 `ISR_BARE=1`, bit 5 `ISR_BARE=2` |
+| 16 | 1 | build options: bit 0 `ALT0_STOP`, bit 1 `IRQ`, bit 2 `ISR_EVENTS`, bit 3 `VECTORS=rjmp48` (before avr-libc), bit 4 `ISR_BARE=1`, bit 5 `ISR_BARE=2` |
 | 17 | 1 | current mode |
 | 18 | 2 | start counter: number of starts since the counter was last found invalid (see 0xf3) |
 | 20 | 1 | last vector that hit a census stub, 0xff for none |
@@ -318,18 +321,17 @@ shown that it works.
 ### 0xf3: interrupt census (experiment 10)
 
 `wValue` bit 0 = clear the counters after reading, `wIndex` 0, `wLength`
-49, or 97 with `VECTORS=rjmp48`.
+49.
 
 | Offset | Contents |
 |--------|----------|
 | 0–1 | entry for vector 0: the start counter (never cleared) |
-| 2n–2n+1 | number of times vector n was taken, n = 1 to 23, saturating at 0xffff; with `VECTORS=rjmp48`, n = 1 to 47 counts the slot at address 2n |
-| 48 (96) | last vector that hit a stub, 0xff for none |
+| 2n–2n+1 | number of times vector n was taken, n = 1 to 23, saturating at 0xffff |
+| 48 | last vector that hit a stub, 0xff for none |
 
-With `VECTORS=rjmp48` the vector table is 48 one word `RJMP`s, one for
-every 2 bytes of 0x0000–0x005f, so that the census also catches vectors 2
-bytes apart; slot 22, address 0x002c, is the USB handler, which still
-counts itself as vector 11.
+The census of vectors 2 bytes apart in `docs/hardware.md` ran with a table
+of 48 one word `RJMP`s, `make VECTORS=rjmp48` in commit bcc9f23; avr-libc's
+fixed table of 24 `JMP`s leaves no room for it.
 
 Vector 11 is the USB handler and counts its calls itself; every other
 vector of the 24 points to a stub that counts and returns with `RETI`. The
@@ -404,20 +406,21 @@ interrupt that keeps firing leaves the firmware able to report it.
 `check.sh`, run by `make`, checks the output of `avr-objdump -d`:
 
 - the vector table: 24 `JMP`s at 0x0000–0x005c, vector 0 to the startup
-  code, vector 11 to the USB handler, all others to their census stub; or,
-  with `VECTORS=rjmp48`, 48 `RJMP`s, slot 22 to the USB handler;
-- the delay loops: both inner loops count down with a `DEC`. The assembler
-  sources go through the C preprocessor, and a backslash at the end of a
-  comment once made it swallow the `DEC` of both loops, so that the first
-  delay of the bring-up never ended;
-- the startup code: `SP` set to 0x0fff, `.data` copied with exactly one
-  plain `LPM`;
-- no `MUL`, `MULS`, `MULSU`, `FMUL*`, `MOVW`, `ELPM`, `LPM Rd, Z(+)`, `SPM`,
-  `SLEEP`, `WDR`, `EIJMP`, `EICALL`, `BREAK` or `DES` anywhere except the
-  one deliberate instruction in each instruction test function and the
-  plain `ELPM` of `pm_read`; it lists those;
-- the image: a multiple of 62 bytes, at most 7502, starting with a `JMP`, or
-  an `RJMP` with `VECTORS=rjmp48`.
+  code at 0x0060, vector 11 to the USB handler, all others to their census
+  handler;
+- the delay loop of the timing request counts down with a `DEC`. The
+  assembler sources go through the C preprocessor, and a backslash at the
+  end of a comment once made it swallow the `DEC` of both hand-written
+  delay loops, so that the first delay of the bring-up never ended; the
+  bring-up's delay is avr-libc's now;
+- the startup code: the stack pointer saved for the crash record, then
+  `SP` set to 0x0fff, `.data` copied with exactly one plain `ELPM`;
+- no `MUL`, `MULS`, `MULSU`, `FMUL*`, `MOVW`, `ELPM` with a register,
+  `LPM Rd, Z(+)`, `SPM`, `SLEEP`, `WDR`, `EIJMP`, `EICALL`, `BREAK` or `DES`
+  anywhere except the one deliberate instruction in each instruction test
+  function, and the plain `ELPM` only there, in `pm_read` and in the
+  startup code; it lists the deliberate ones;
+- the image: a multiple of 62 bytes, at most 7502, starting with a `JMP`.
 
 ## Clean-room statement
 
@@ -432,7 +435,8 @@ This firmware was written from these sources only:
   documented firmware in `test_probe.py`, and a search of `probe.py` for
   its use of the info query;
 - avr-libc's headers `avr/iom103.h` and `avr/common.h`, for the ATmega103
-  register addresses;
+  register addresses; since the move to avr-libc, also its startup code,
+  headers and delay loops as a library;
 - general public knowledge of the AVR instruction set, of avr-gcc and of
   USB 2.0.
 
@@ -480,6 +484,10 @@ Version 0.1 on an EasyCAP 002, uploaded through the bootloader with
 - **Test requests**: all of them work. Experiments 8 to 11 gave: only the
   plain `ELPM` of the instructions tested works, program memory is 8 KB,
   the CPU clock is 30.000 MHz; see `docs/hardware.md` "Experiments".
+- **avr-libc**: built with avr-libc's startup code and delay loop instead
+  of its own, the firmware passed the same tests again: enumeration, all
+  test requests, the instruction tests, a read of the whole program memory
+  and the timing request.
 - **Not tried yet**: streaming in any mode, the register access requests
   and i2c, alternate settings, the Linux driver on top of this firmware.
 

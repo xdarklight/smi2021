@@ -50,7 +50,7 @@ static uint16_t identity(void)
 	put16(xbuf + 12, FW_PID);
 	put16(xbuf + 14, (uint16_t)__image_end);
 	xbuf[16] = (FW_ALT0_STOP ? 0x01 : 0) | (FW_IRQ ? 0x02 : 0) |
-		   (FW_ISR_EVENTS ? 0x04 : 0) | (FW_RJMP_TABLE ? 0x08 : 0) |
+		   (FW_ISR_EVENTS ? 0x04 : 0) |
 		   (FW_ISR_BARE == 1 ? 0x10 : 0) | (FW_ISR_BARE == 2 ? 0x20 : 0);
 	xbuf[17] = cur_mode;
 	put16(xbuf + 18, boot_count);

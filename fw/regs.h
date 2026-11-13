@@ -4,31 +4,24 @@
  *
  * Copyright (C) 2026 Martin Blumenstingl <martin.blumenstingl@googlemail.com>
  *
- * The core is treated as an ATmega103 with a bidirectional port C. avr-libc's
- * <avr/io.h> knows no device for -mmcu=avr3, so the few registers in use are
- * defined here by their data space address. Everything above 0x1000 is
- * Somagic's own hardware and accessed as volatile memory.
+ * The core is an ATmega103 (docs/hardware.md "CPU core"), whose registers
+ * come from avr-libc's <avr/io.h>, with a bidirectional port C: avr-libc
+ * follows the real ATmega103, whose port C is an output only, so DDRC and
+ * PINC are defined here. Everything above 0x1000 is Somagic's own hardware
+ * and accessed as volatile memory.
  */
 
 #ifndef OPENSMI21_REGS_H
 #define OPENSMI21_REGS_H
 
 #include <stdint.h>
+#include <avr/io.h>
 
 #define REG8(addr)	(*(volatile uint8_t *)(uint16_t)(addr))
 
-/* AVR I/O registers, data space address = I/O address + 0x20 */
-#define PINC		REG8(0x33)
-#define DDRC		REG8(0x34)
-#define PORTC		REG8(0x35)
-#define DDRA		REG8(0x3a)
-#define PORTA		REG8(0x3b)
-#define RAMPZ		REG8(0x5b)	/* ATmega103; existence unknown */
-#define SPL		REG8(0x5d)
-#define SPH		REG8(0x5e)
-#define SREG		REG8(0x5f)
-
-#define PC0		0
+/* Port C as an input too, at the I/O addresses next to PORTC */
+#define PINC		_SFR_IO8(0x13)
+#define DDRC		_SFR_IO8(0x14)
 
 /* USB device controller, 0x1500-0x157f */
 #define USB_CTRL	REG8(0x1500)	/* bit 3: disconnect, bit 2: suspend */

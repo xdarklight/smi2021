@@ -4,9 +4,12 @@
  *
  * Copyright (C) 2026 Martin Blumenstingl <martin.blumenstingl@googlemail.com>
  *
- * Brings the device up as docs/hardware.md "Startup" describes; crt0.S has
+ * Brings the device up as docs/hardware.md "Startup" describes; avr-libc's
+ * startup code has
  * already done step 1.
  */
+
+#include <util/delay_basic.h>
 
 #include "fw.h"
 #include "regs.h"
@@ -22,6 +25,17 @@ static uint16_t boot_magic __attribute__((section(".noinit")));
 uint16_t reset_sp __attribute__((section(".noinit")));
 struct dbg_record dbg_now __attribute__((section(".noinit")));
 struct dbg_record dbg_crash;
+
+/*
+ * The delay unit of the original bring-up, about 160 cycles: 39 passes of
+ * avr-libc's 4 cycle loop and the loop around it. Only the order of
+ * magnitude matters, see docs/hardware.md "Startup".
+ */
+void delay_160(uint16_t units)
+{
+	while (units--)
+		_delay_loop_2(39);
+}
 
 int main(void)
 {

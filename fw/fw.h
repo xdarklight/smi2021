@@ -9,6 +9,7 @@
 #define OPENSMI21_FW_H
 
 #include <stdint.h>
+#include <avr/interrupt.h>
 
 #define FW_VERSION_MAJOR	0
 #define FW_VERSION_MINOR	1
@@ -58,12 +59,8 @@ extern uint8_t xbuf[XBUF_SIZE];
 #define EV_SUSPEND		0x08
 extern volatile uint8_t usb_events;
 
-/* Interrupt census, filled by the stubs in crt0.S and the USB handler */
-#if FW_RJMP_TABLE
-#define NUM_VECTORS		48	/* slots of 2 bytes, see crt0.S */
-#else
+/* Interrupt census, filled by the handlers in isr.S and the USB handler */
 #define NUM_VECTORS		24
-#endif
 extern volatile uint16_t irq_census[NUM_VECTORS];
 extern volatile uint8_t irq_last;
 
@@ -84,7 +81,7 @@ extern uint16_t boot_count;
  */
 #define DBG_SETUPS	8
 struct dbg_record {
-	uint16_t reset_sp;		/* SP at the reset vector, before crt0 */
+	uint16_t reset_sp;		/* SP at reset, see isr.S */
 	uint8_t phase;			/* of the last control request */
 	uint8_t pos;			/* next entry of setup[] */
 	uint8_t setup[DBG_SETUPS][8];
@@ -109,9 +106,11 @@ uint8_t vendor_out(const struct setup *s, uint16_t len);
 /* test.c */
 uint8_t test_in(const struct setup *s, uint16_t *len);
 
+/* main.c */
+void delay_160(uint16_t units);			/* about 160 cycles per unit */
+
 /* asm.S */
-void delay_160(uint16_t units);			/* 160 cycles per unit */
-void delay_1000(uint16_t units);		/* 1000 cycles per unit */
+void delay_1000(uint16_t units);		/* exactly 1000 cycles per unit */
 void insn_mul(uint8_t *out);
 void insn_movw(uint8_t *out);
 void insn_lpm_z(uint8_t *out);
@@ -128,7 +127,7 @@ extern const uint8_t __image_end[];
 
 static inline void irq_off(void)
 {
-	__asm__ __volatile__ ("cli" ::: "memory");
+	cli();
 }
 
 /* Interrupt test, request 0xf7 */
@@ -145,7 +144,7 @@ static inline void irq_on(void)
 {
 #if FW_IRQ
 	if (!irqrec.storm)
-		__asm__ __volatile__ ("sei" ::: "memory");
+		sei();
 #else
 	__asm__ __volatile__ ("" ::: "memory");
 #endif

@@ -10,7 +10,7 @@
  */
 
 OUTPUT_FORMAT("elf32-avr", "elf32-avr", "elf32-avr")
-OUTPUT_ARCH(avr:3)
+OUTPUT_ARCH(avr:31)
 ENTRY(__vectors)
 
 MEMORY
@@ -21,12 +21,32 @@ MEMORY
 
 SECTIONS
 {
+	/* avr-libc's crt: .vectors, then .init0 to .init9 up to main() */
 	.text : {
 		KEEP(*(.vectors))
-		KEEP(*(.init))
+		KEEP(*(.init0))
+		KEEP(*(.init1))
+		KEEP(*(.init2))
+		KEEP(*(.init3))
+		KEEP(*(.init4))
+		KEEP(*(.init5))
+		KEEP(*(.init6))
+		KEEP(*(.init7))
+		KEEP(*(.init8))
+		KEEP(*(.init9))
 		*(.progmem*)
 		. = ALIGN(2);
 		*(.text .text.*)
+		KEEP(*(.fini9))
+		KEEP(*(.fini8))
+		KEEP(*(.fini7))
+		KEEP(*(.fini6))
+		KEEP(*(.fini5))
+		KEEP(*(.fini4))
+		KEEP(*(.fini3))
+		KEEP(*(.fini2))
+		KEEP(*(.fini1))
+		KEEP(*(.fini0))
 		. = ALIGN(2);
 	} > text
 

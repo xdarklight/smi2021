@@ -11,8 +11,6 @@
 #   make IRQ=0                 never enable interrupts, poll only
 #   make ISR_EVENTS=0          vector 11 only counts and logs; the main
 #                              loop polls the events (interrupt test)
-#   make VECTORS=rjmp48        vector table of 48 RJMPs, for a census of
-#                              2 byte vector slots (interrupt test)
 #   make ISR_BARE=1            vector 11 is a bare RETI (interrupt test)
 #   make ISR_BARE=2            vector 11 counts but reads no register
 
@@ -25,26 +23,25 @@ PID		?= 0x003c
 ALT0_STOP	?= 1
 IRQ		?= 0
 ISR_EVENTS	?= 1
-VECTORS		?= jmp24
 ISR_BARE	?= 0
-RJMP_TABLE	:= $(if $(filter rjmp48,$(VECTORS)),1,0)
 
 # Largest image known to work, 121 upload units of 62 bytes
 MAX_SIZE	:= 7502
 
 B		:= build
 SRCS_C		:= main.c usb.c vendor.c test.c
-SRCS_S		:= crt0.S asm.S
+SRCS_S		:= isr.S asm.S
 OBJS		:= $(addprefix $(B)/,$(SRCS_S:.S=.o) $(SRCS_C:.c=.o))
 
-ARCH		:= -mmcu=avr3
+# avr-libc's ATmega103: its startup code, headers and delay loops
+ARCH		:= -mmcu=atmega103
 CFLAGS		:= $(ARCH) -Os -std=gnu99 -Wall -Wextra -Werror=implicit \
 		   -ffreestanding -fno-jump-tables -fno-tree-switch-conversion \
 		   -ffunction-sections -fdata-sections -fshort-enums \
-		   -DFW_PID=$(PID) -DFW_ALT0_STOP=$(ALT0_STOP) -DFW_IRQ=$(IRQ) -DFW_ISR_EVENTS=$(ISR_EVENTS) -DFW_RJMP_TABLE=$(RJMP_TABLE) \
-		   -DFW_ISR_BARE=$(ISR_BARE) -g
-ASFLAGS		:= $(ARCH) -DFW_RJMP_TABLE=$(RJMP_TABLE) -DFW_ISR_BARE=$(ISR_BARE) -g
-LDFLAGS		:= $(ARCH) -nostartfiles -nostdlib -Wl,-T,opensmi21.ld \
+		   -DFW_PID=$(PID) -DFW_ALT0_STOP=$(ALT0_STOP) -DFW_IRQ=$(IRQ) -DFW_ISR_EVENTS=$(ISR_EVENTS) \
+		   -DFW_ISR_BARE=$(ISR_BARE) -DF_CPU=30000000UL -g
+ASFLAGS		:= $(ARCH) -DFW_ISR_BARE=$(ISR_BARE) -g
+LDFLAGS		:= $(ARCH) -Wl,-T,opensmi21.ld \
 		   -Wl,--gc-sections -Wl,-Map,$(B)/opensmi21.map
 
 all: $(B)/opensmi21.bin check
@@ -59,7 +56,7 @@ $(B)/%.o: %.S Makefile | $(B)
 	$(CC) $(ASFLAGS) -c -o $@ $<
 
 $(B)/opensmi21.elf: $(OBJS) opensmi21.ld
-	$(CC) $(LDFLAGS) -o $@ $(OBJS) -lgcc
+	$(CC) $(LDFLAGS) -o $@ $(OBJS)
 
 # Plain image from address 0, padded with 0xff to a multiple of 62 bytes
 $(B)/opensmi21.bin: $(B)/opensmi21.elf
