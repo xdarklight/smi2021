@@ -30,6 +30,11 @@
 
 #define SMI2021_ISOC_TRANSFERS		16
 
+/* The isochronous stream consists of chunks starting with a magic word */
+#define SMI2021_CHUNK_SIZE		0x400
+#define SMI2021_CHUNK_HDR_SIZE		sizeof(__be32)
+#define SMI2021_CHUNK_DATA_SIZE		(SMI2021_CHUNK_SIZE - SMI2021_CHUNK_HDR_SIZE)
+
 /* Head byte of the request that reads the hardware state or sets the mode */
 #define SMI2021_HW_STATE_HEAD		0x01
 

@@ -33,7 +33,10 @@
 #define SMI2021_ALT_STREAM		2
 #define SMI2021_ISOC_PACKETS		10
 
-/* Values of smi2021_hw_state.state */
+/*
+ * Modes set with a hardware state request. The firmware starts in standby, and
+ * also knows the modes 0x02 and 0x04, whose purpose is unknown.
+ */
 #define SMI2021_MODE_STANDBY		0x03
 #define SMI2021_MODE_CAPTURE		0x05
 
@@ -41,37 +44,48 @@
 #define SMI2021_REG_CTRL_HEAD		0x0b
 
 /*
- * Values of smi2021_reg_msg.data_cntl and .data_offset, which select the kind
- * of register access. Only these combinations are known; the meaning of the
- * individual bits is not.
+ * Flags in smi2021_reg_msg.flags, whose low bits hold the number of address
+ * bytes at the start of the data. A bridge register is addressed by its 16 bit
+ * address in the data space of the bridge's microcontroller, otherwise this is
+ * an i2c transfer.
  */
-#define SMI2021_CNTL_SMI_WRITE		0x00
-#define SMI2021_CNTL_I2C_PREPARE_READ	0x84
-#define SMI2021_CNTL_I2C_READ		0xa0
-#define SMI2021_CNTL_I2C_WRITE		0xc0
+#define SMI2021_REG_FLAG_BRIDGE		BIT(7)
 
-#define SMI2021_OFFSET_SMI		0x82
-#define SMI2021_OFFSET_I2C		0x01
+/* Commands of the bridge's i2c engine, for smi2021_reg_msg.cntl */
+#define SMI2021_I2C_CMD_WRITE		0x84	/* write the data bytes */
+#define SMI2021_I2C_CMD_READ		0xa0	/* read the data bytes */
+#define SMI2021_I2C_CMD_WRITE_REG	0xc0	/* write subaddress and data */
+/*
+ * The firmware retries a failed transfer 16 times. If it still fails, this
+ * flag is set in the reply, so a failure is only reported for reads.
+ */
+#define SMI2021_I2C_CMD_NAK		BIT(0)
 
 /*
- * Registers of the smi2021 bridge itself. The values written to them were
- * taken from the vendor driver and their meaning is not known.
+ * The bridge's microcontroller is an AVR whose I/O registers match those of an
+ * ATmega16, so these are its GPIO port registers.
  */
-#define SMI2021_REG_AUDIO_EN		0x1740
-#define SMI2021_REG_AUDIO_EN_ON		0x1d
-#define SMI2021_REG_AUDIO_EN_OFF	0x00
-#define SMI2021_REG_STREAM_EN		0x1800
-#define SMI2021_REG_STREAM_EN_ON	0x0d
-
-/* I2C address of the saa7113 compatible video decoder */
-#define SMI2021_DECODER_I2C_ADDR	0x4a
+#define SMI2021_REG_DDRC		0x34
+#define SMI2021_REG_PORTC		0x35
+#define SMI2021_REG_DDRA		0x3a
+#define SMI2021_REG_PORTA		0x3b
 
 /*
- * The isochronous stream consists of chunks, each of them starting with a
- * magic word that identifies its payload.
+ * Audio engine control. Writing 0x1d starts the transfer of audio data and
+ * 0x00 stops it. When streaming starts, the firmware itself only sets 0x05.
  */
-#define SMI2021_CHUNK_SIZE		0x400
-#define SMI2021_CHUNK_HDR_SIZE		sizeof(__be32)
+#define SMI2021_REG_AUDIO_CTRL		0x1740
+#define SMI2021_REG_AUDIO_CTRL_ON	0x1d
+#define SMI2021_REG_AUDIO_CTRL_OFF	0x00
+
+/* Video engine control. The meaning of the value is not known. */
+#define SMI2021_REG_VIDEO_CTRL		0x1800
+#define SMI2021_REG_VIDEO_CTRL_ON	0x0d
+
+/* 7 bit I2C address of the saa7113 compatible decoder, 4AH in its datasheet */
+#define SMI2021_DECODER_I2C_ADDR	0x25
+
+/* Magic words that identify the payload of an isochronous chunk */
 #define SMI2021_CHUNK_MAGIC_VIDEO	0xaaaa0000
 #define SMI2021_CHUNK_MAGIC_AUDIO	0xaaaa0001
 
@@ -83,12 +97,16 @@
 #define SMI2021_TRC_V			BIT(5)	/* vertical blanking */
 #define SMI2021_TRC_F			BIT(6)	/* second field */
 
+/*
+ * A register access request. The data starts with the address bytes and is
+ * followed by the data bytes; the firmware replies to reads in the same layout.
+ */
 struct smi2021_reg_msg {
 	u8 head;
-	u8 i2c_addr;
-	u8 data_cntl;
-	u8 data_offset;
-	u8 data_size;
+	u8 i2c_addr;	/* 8 bit address, i.e. the 7 bit address shifted */
+	u8 cntl;	/* i2c engine command, 0 to write a bridge register */
+	u8 flags;	/* SMI2021_REG_FLAG_* | number of address bytes */
+	u8 size;	/* number of data bytes */
 	union {
 		u8 val;
 		struct {
@@ -98,7 +116,7 @@ struct smi2021_reg_msg {
 		struct {
 			__be16 reg;
 			u8 val;
-		} __packed smi;
+		} __packed bridge;
 		u8 reserved[8];
 	} __packed data;
 } __packed;
@@ -148,11 +166,10 @@ static int smi2021_write_reg(struct smi2021 *smi2021, u16 reg, u8 val)
 {
 	struct smi2021_reg_msg msg = {
 		.head = SMI2021_REG_CTRL_HEAD,
-		.data_cntl = SMI2021_CNTL_SMI_WRITE,
-		.data_offset = SMI2021_OFFSET_SMI,
-		.data_size = sizeof(u8),
-		.data.smi.reg = cpu_to_be16(reg),
-		.data.smi.val = val,
+		.flags = SMI2021_REG_FLAG_BRIDGE | sizeof(msg.data.bridge.reg),
+		.size = sizeof(msg.data.bridge.val),
+		.data.bridge.reg = cpu_to_be16(reg),
+		.data.bridge.val = val,
 	};
 
 	guard(mutex)(&smi2021->reg_lock);
@@ -164,10 +181,10 @@ static int smi2021_i2c_write(struct smi2021 *smi2021, u8 addr, u8 reg, u8 val)
 {
 	struct smi2021_reg_msg msg = {
 		.head = SMI2021_REG_CTRL_HEAD,
-		.i2c_addr = addr,
-		.data_cntl = SMI2021_CNTL_I2C_WRITE,
-		.data_offset = SMI2021_OFFSET_I2C,
-		.data_size = sizeof(u8),
+		.i2c_addr = addr << 1,
+		.cntl = SMI2021_I2C_CMD_WRITE_REG,
+		.flags = sizeof(msg.data.i2c.reg),
+		.size = sizeof(msg.data.i2c.val),
 		.data.i2c.reg = reg,
 		.data.i2c.val = val,
 	};
@@ -181,20 +198,21 @@ static int smi2021_i2c_read(struct smi2021 *smi2021, u8 addr, u8 reg, u8 *val)
 {
 	struct smi2021_reg_msg msg = {
 		.head = SMI2021_REG_CTRL_HEAD,
-		.i2c_addr = addr,
-		.data_cntl = SMI2021_CNTL_I2C_PREPARE_READ,
-		.data_size = sizeof(u8),
-		.data.i2c.reg = reg,
+		.i2c_addr = addr << 1,
+		.cntl = SMI2021_I2C_CMD_WRITE,
+		.size = sizeof(reg),
+		.data.val = reg,
 	};
 	int rc;
 
 	guard(mutex)(&smi2021->reg_lock);
 
+	/* Set the register pointer, then read one byte */
 	rc = smi2021_send_reg_msg(smi2021, &msg);
 	if (rc)
 		return rc;
 
-	msg.data_cntl = SMI2021_CNTL_I2C_READ;
+	msg.cntl = SMI2021_I2C_CMD_READ;
 	rc = smi2021_send_reg_msg(smi2021, &msg);
 	if (rc)
 		return rc;
@@ -202,6 +220,9 @@ static int smi2021_i2c_read(struct smi2021 *smi2021, u8 addr, u8 reg, u8 *val)
 	rc = smi2021_ctrl_read(smi2021->udev, msg.head, &msg, sizeof(msg));
 	if (rc)
 		return rc;
+
+	if (msg.cntl & SMI2021_I2C_CMD_NAK)
+		return -EIO;
 
 	*val = msg.data.val;
 
@@ -236,25 +257,28 @@ static const struct i2c_algorithm smi2021_i2c_algo = {
 static int smi2021_initialize(struct smi2021 *smi2021)
 {
 	/*
-	 * The meaning of these registers is unknown. The sequence was taken
-	 * from the vendor driver and is believed to toggle the reset lines of
-	 * the audio ADC and of the video decoder.
+	 * Pulse the GPIO lines PA7, PC0 and PC4, as the vendor driver does.
+	 * What they are connected to is not known; presumably these are the
+	 * reset inputs of the audio ADC and of the video decoder.
 	 */
-	static const u8 init[][2] = {
-		{ 0x3a, 0x80 },
-		{ 0x3b, 0x00 },
-		{ 0x34, 0x01 },
-		{ 0x35, 0x00 },
-		{ 0x34, 0x11 },
-		{ 0x35, 0x11 },
-		{ 0x3b, 0x80 },
-		{ 0x3b, 0x00 },
+	static const struct {
+		u16 reg;
+		u8 val;
+	} init[] = {
+		{ SMI2021_REG_DDRA, BIT(7) },
+		{ SMI2021_REG_PORTA, 0 },
+		{ SMI2021_REG_DDRC, BIT(0) },
+		{ SMI2021_REG_PORTC, 0 },
+		{ SMI2021_REG_DDRC, BIT(4) | BIT(0) },
+		{ SMI2021_REG_PORTC, BIT(4) | BIT(0) },
+		{ SMI2021_REG_PORTA, BIT(7) },
+		{ SMI2021_REG_PORTA, 0 },
 	};
 	unsigned int i;
 	int rc;
 
 	for (i = 0; i < ARRAY_SIZE(init); i++) {
-		rc = smi2021_write_reg(smi2021, init[i][0], init[i][1]);
+		rc = smi2021_write_reg(smi2021, init[i].reg, init[i].val);
 		if (rc)
 			return rc;
 	}
@@ -441,14 +465,14 @@ static void smi2021_process_packet(struct smi2021 *smi2021, const u8 *p,
 
 	for (i = 0; i < size; i += SMI2021_CHUNK_SIZE) {
 		const u8 *data = p + i + SMI2021_CHUNK_HDR_SIZE;
-		unsigned int len = SMI2021_CHUNK_SIZE - SMI2021_CHUNK_HDR_SIZE;
 
 		switch (get_unaligned_be32(p + i)) {
 		case SMI2021_CHUNK_MAGIC_VIDEO:
-			smi2021_parse_video(smi2021, data, len);
+			smi2021_parse_video(smi2021, data,
+					    SMI2021_CHUNK_DATA_SIZE);
 			break;
 		case SMI2021_CHUNK_MAGIC_AUDIO:
-			smi2021_audio(smi2021, data, len);
+			smi2021_audio(smi2021, data, SMI2021_CHUNK_DATA_SIZE);
 			break;
 		}
 	}
@@ -549,9 +573,9 @@ err_free:
 
 void smi2021_toggle_audio(struct smi2021 *smi2021, bool enable)
 {
-	smi2021_write_reg(smi2021, SMI2021_REG_AUDIO_EN,
-			  enable ? SMI2021_REG_AUDIO_EN_ON :
-				   SMI2021_REG_AUDIO_EN_OFF);
+	smi2021_write_reg(smi2021, SMI2021_REG_AUDIO_CTRL,
+			  enable ? SMI2021_REG_AUDIO_CTRL_ON :
+				   SMI2021_REG_AUDIO_CTRL_OFF);
 }
 
 int smi2021_start_streaming(struct vb2_queue *vq, unsigned int count)
@@ -591,8 +615,8 @@ int smi2021_start_streaming(struct vb2_queue *vq, unsigned int count)
 		}
 	}
 
-	rc = smi2021_write_reg(smi2021, SMI2021_REG_STREAM_EN,
-			       SMI2021_REG_STREAM_EN_ON);
+	rc = smi2021_write_reg(smi2021, SMI2021_REG_VIDEO_CTRL,
+			       SMI2021_REG_VIDEO_CTRL_ON);
 	if (rc)
 		goto err_kill_urbs;
 
