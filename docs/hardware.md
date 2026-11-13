@@ -49,7 +49,7 @@ addresses are byte addresses, as in `avr-objdump` output.
 | System control | 0x3080 | Somagic's own |
 | Engine of mode 4 | 0x3100 | Somagic's own |
 | Second i2c engine | 0x3180–0x31a4 (inferred extent) | same as the first one |
-| Board identification (inferred) | 0x31a5 | Somagic's own |
+| Board identification (inferred) | 0x31a5 | Somagic's own, see [Board identification](protocol.md#board-identification) |
 
 The processor and its peripherals are those of an Atmel ATmega103. None
 of the hardware specific to the device could be matched to a controller

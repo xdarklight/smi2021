@@ -76,7 +76,7 @@ of it with [register access requests](#register-access-requests).
 | 0x3080 | bit 4 is set on suspend, and the Windows driver initializes the device again when it finds it set; bit 2 is pulsed by the Windows driver; bit 7 is cleared by the `wValue` 0xfb request and never set by the firmware, so presumably by the hardware (inferred). See [`hardware.md`](hardware.md#system-control-register-0x3080) |
 | 0x3100 | engine of mode 4, written 0 and 1 |
 | 0x3180–0x318f | second i2c engine |
-| 0x31a5 | read by the Windows driver for `smi2021_3f.bin` to tell boards apart, see [Initialization](#initialization) |
+| 0x31a5 | read by the Windows driver for `smi2021_3f.bin` to tell boards apart, see [Board identification](#board-identification) |
 
 As on any AVR, an I/O register is also visible in the data space at its I/O
 address plus 0x20.
@@ -460,13 +460,37 @@ to is not known; the authors of easycap-somagic-linux took `PC0` and `PC4`
 for the reset of the audio ADC and `PA7` for the reset of the decoder
 (reported, unconfirmed).
 
-The Windows driver for `smi2021_3f.bin` tells three boards apart, which
-differ in the setup of the decoder and of a tuner that it also drives, at
-the 8 bit i2c address 0xc0. It reads 0x31a5 and `PINC`, and takes the first
-board if bits 7–6 of 0x31a5 are `10`, or `00` with `PC2` high; otherwise it
-makes `PC2` an input and takes the second board if `PC2` is high, and the
-third if not (Windows driver). So `PC2` is presumably a strap, and 0x31a5
-holds an identification (inferred).
+### Board identification
+
+The Windows driver for `smi2021_3f.bin` tells three boards apart, right
+after the upload of the firmware (Windows driver):
+
+1. It reads 0x31a5 and `PINC`. If bits 7–6 of 0x31a5 are `10`, or `00`
+   with `PC2` high, this is the first board.
+2. Otherwise it makes `PC2` an input and reads `PINC` again: with `PC2`
+   high this is the second board, with `PC2` low the third.
+
+As `smi2021_3f.bin` makes `PC2` an output, driven low, when it sets up the
+USB controller, the first reading of `PC2` is low on any board, so in
+practice bits 7–6 of 0x31a5 pick the first board, and `PC2`, read as an
+input, the other two. So `PC2` is presumably a strap, and 0x31a5 holds an
+identification that the hardware provides, as no firmware writes it
+(inferred). 0x31a5 is the byte after the 32 that the data buffer of the
+second i2c engine presumably holds. The drivers for `smi2021_3c.bin` don't
+read it.
+
+The boards differ in the video decoder (Windows driver):
+
+| Board | Decoder | Picture controls | Signal status | Inputs |
+|-------|---------|------------------|---------------|--------|
+| 1 | a chip at the 8 bit i2c address 0xc0; the driver doesn't access the SAA7113's address on this board | registers 0x2c–0x2f of that chip, each written after 0x01 to its register 0x40 | its register 0x51 | not known; the driver offers two more pins of its crossbar |
+| 2 | SAA7113 at 0x4a | SAA7113 registers 0x0a–0x0d | SAA7113 register 0x1f | four, selected with 0xc2, 0xc3, 0xc0 and 0xc1 in SAA7113 register 0x02 for inputs 1 to 4, which is the wiring of the EasyCAP 002, see [Inputs](#inputs) |
+| 3 | SAA7113 at 0x4a | none | not known | not known; setting the video standard writes 0xc0, AI11, to SAA7113 register 0x02 for all inputs but one |
+
+On the first board, the driver also sets the video standard through the
+chip at 0xc0, in its registers 0x13 and 0x19, instead of through SAA7113
+register 0x0e. What that chip is, is not known; that it has registers with
+subaddresses rules out a plain tuner PLL.
 
 ## Transport stream input
 
