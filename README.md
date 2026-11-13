@@ -96,7 +96,18 @@ the Developer's Certificate of Origin, see
 after reviewing it. The same document asks for an `Assisted-by:` tag
 instead of the `Co-Authored-By:` used in this repository, and
 `Documentation/process/generated-content.rst` asks to be transparent about
-what a tool generated, which belongs in the cover letter.
+what a tool generated, which belongs in the cover letter. A draft, to be
+adjusted to what you reviewed and tested:
+
+> This driver is based on the out of tree driver by Jon Arne Jørgensen. An
+> AI coding assistant (Claude, by Anthropic) rewrote most of it for the
+> current kernel APIs, fixed the bugs it found, addressed the comments from
+> the review of the 2013 submission, and analyzed the firmware images to
+> name the register values the driver uses. It did so on a series of
+> requests to prepare the driver for mainline, to review it against the
+> current tree and the old review, to replace magic numbers, and to find out
+> unknown values from the firmware. I reviewed the result and tested it on
+> an EasyCAP 002 (...).
 
 Before posting, the patch passes `checkpatch.pl --strict` apart from the
 missing `Signed-off-by:`, and builds without warnings with `W=1`. Still to
