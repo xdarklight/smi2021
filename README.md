@@ -55,6 +55,11 @@ device and what its firmware does with the bridge's hardware, as found by
 analyzing the firmware images. It contains no code from the firmware, so
 that it can serve as the basis for a driver or a replacement firmware
 written without looking at the original.
+[`docs/hardware.md`](docs/hardware.md) describes the inside of the bridge
+for the authors of such a replacement: the processor, the memory map,
+which of its blocks are standard AVR peripherals, how the USB controller
+and the other blocks are programmed, and the experiments on hardware that
+would settle what is still unknown.
 
 ## Building
 

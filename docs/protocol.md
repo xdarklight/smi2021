@@ -24,6 +24,10 @@ Statements are marked by how they were established:
 Unmarked statements are observed. Where nothing is known, the document
 says so.
 
+The inside of the bridge, as far as a replacement firmware needs it, is
+described in [`hardware.md`](hardware.md): the processor, the memory map,
+and how the USB controller and the other blocks are programmed.
+
 ## Overview
 
 The bridge combines a microcontroller with fixed function hardware: a USB
@@ -42,27 +46,10 @@ The device has no non-volatile memory for its firmware:
 
 ## Microcontroller
 
-The microcontroller executes the AVR instruction set. Its I/O registers
-match those of an ATmega16: the firmware uses ports A and C (`PINC` 0x13,
-`DDRC` 0x14, `PORTC` 0x15, `DDRA` 0x1a), Timer0 (`TCNT0` 0x32, `TCCR0`
-0x33), the stack pointer (0x3d, 0x3e) and `SREG` (0x3f) at their ATmega16
-addresses, and contains unused UART helpers for its UART registers (0x09 to
-0x0c). As on any AVR, an I/O register is also visible in the data space at
-its I/O address plus 0x20.
-
-Unlike an ATmega16, it has SRAM up to address 0x0fff: the firmware sets up
-its stack there.
-
-The firmware image is a plain AVR program image, starting at address 0 with
-the interrupt vector table, 4 bytes per vector. The firmware uses two
-vectors:
-
-| Vector | Byte address | Use |
-|--------|--------------|-----|
-| 0      | 0x0000       | reset |
-| 11     | 0x002c       | USB device controller events (inferred from what the handler does) |
-
-All other vector entries are `0xffff`.
+The microcontroller executes the AVR instruction set, and its core, I/O
+registers and SRAM, up to 0x0fff, are those of an ATmega103 (inferred). The firmware image is a
+plain AVR program image that starts at address 0 with the interrupt vector
+table. See [`hardware.md`](hardware.md#cpu-core) for details.
 
 ## Data space
 
@@ -74,49 +61,27 @@ of it with [register access requests](#register-access-requests).
 |---------|-----|
 | 0x0020–0x005f | AVR I/O registers, see above |
 | 0x0060–0x0fff | SRAM |
-| 0x1500–0x15ff | USB device controller, see below |
-| 0x1600 | bit 7 is set when streaming starts in any mode; in `smi2021_3c.bin`, bits 1–0 also control the [IR receiver](#ir-receiver) |
+| 0x1500–0x157f | USB device controller, see [`hardware.md`](hardware.md#usb-device-controller) |
+| 0x1580 | engine of mode 3 |
+| 0x1600 | bit 7 is set when streaming starts in any mode; bits 1–0 control the [IR receiver](#ir-receiver) |
 | 0x1740 | audio engine control, see [Isochronous stream](#isochronous-stream) |
 | 0x1780–0x178f | first i2c engine, see [I2C engines](#i2c-engines) |
 | 0x1800 | video engine control |
 | 0x1880 | stream source; written as 0, 1 or 2 depending on the mode |
-| 0x2000, 0x2040 | buffers of the control endpoint (inferred, from the pointer registers below) |
+| 0x2000, 0x2040 | buffers of the control endpoint (inferred, from the pointer registers of the [USB device controller](hardware.md#control-endpoint)) |
 | 0x3080 | bit 4 is set on suspend; bit 7 is cleared by the `wValue` 0xfb request and never set by the firmware, so presumably by the hardware (inferred). The Windows driver reads this register during initialization (reported) |
 | 0x3100 | engine of mode 4, written 0 and 1 |
 | 0x3180–0x318f | second i2c engine |
 
+As on any AVR, an I/O register is also visible in the data space at its I/O
+address plus 0x20.
+
 ### USB device controller
 
-| Address | Use |
-|---------|-----|
-| 0x1500 | bit 3: soft disconnect while set (inferred: the firmware sets it for a while after start, then clears it); bit 2: set on suspend |
-| 0x1501 | bit 1: set when the device is connected at high speed |
-| 0x1502 | bit 4: setup packet received |
-| 0x1503 | event code, see [USB events](#usb-events) |
-| 0x1504 | device address, written after `SET_ADDRESS` |
-| 0x1507 | initialized to 0xc4 |
-| 0x1510 | control endpoint: bits 1 and 2 are cleared, then bit 2 is set to stall |
-| 0x1511 | initialized to 0x03 |
-| 0x1513, 0x1515 | initialized to 0x40 (inferred: the control endpoint's packet size) |
-| 0x1518 | bit 7: data received on the control endpoint |
-| 0x1519–0x151a | 0x2000, little endian (inferred: receive buffer address) |
-| 0x151b | length of the data to send on the control endpoint |
-| 0x151c | bit 7: data ready to send on the control endpoint; the firmware waits for it to clear before it queues more |
-| 0x151d–0x151e | 0x2040, little endian (inferred: transmit buffer address) |
-| 0x1520–0x1524 | endpoint register block A, see below |
-| 0x1530–0x1534 | endpoint register block B, laid out like block A |
-| 0x1538, 0x153c | cleared on every mode request |
-| 0x1540 | endpoint register block C (inferred): handled like blocks A and B by `SET_CONFIGURATION` and the endpoint halt feature |
-| 0x1580 | engine of mode 3: written 0x03 by the mode request, bit 7 set when streaming starts |
-
-The firmware uses blocks A and B for the isochronous stream. Relative to
-the base of a block:
-
-| Offset | Use |
-|--------|-----|
-| +0 | bits 2–1: state of the endpoint. The firmware clears them, then sets bit 1 to enable it (inferred); the endpoint halt feature changes them as well |
-| +1 | 0x15 or 0x25, depending on the [mode](#modes) |
-| +3, +4 | maximum packet size, little endian: 0x0400 at high speed, 0x03ff at full speed |
+The registers of the USB device controller, from 0x1500 to 0x157f, are
+described in [`hardware.md`](hardware.md#usb-device-controller). The
+isochronous stream uses its endpoint register blocks A (0x1520) and B
+(0x1530); the [mode](#modes) selects which of them sends.
 
 ## Bootloader
 
@@ -157,15 +122,9 @@ presumably replaces the one of alternate setting 2 at full speed.
 
 ### USB events
 
-The firmware handles everything in its USB interrupt, which reads the event
-code at 0x1503 and defers the work to its main loop:
-
-| Code | Event |
-|------|-------|
-| 0x01 with 0x1502 bit 4 | setup packet on the control endpoint |
-| 0x80 | speed known: sets the maximum packet size of endpoint blocks A and B from 0x1501 bit 1 |
-| 0x81 | bus reset: resets the control endpoint state |
-| 0x85 | suspend (inferred): drives `PC0` low and sets 0x3080 bit 4 and 0x1500 bit 2 |
+The firmware handles setup packets, bus reset, the detection of the bus
+speed and suspend, see [`hardware.md`](hardware.md#interrupt). It does
+nothing on resume.
 
 ### Standard requests
 
@@ -179,12 +138,15 @@ current [mode](#modes). Selecting alternate setting 0 stops nothing.
 
 ## Vendor requests
 
-All vendor requests use `bRequest` 0x01, except one, and `wIndex` 0.
+All vendor requests use `bRequest` 0x01 and `wIndex` 0, apart from the
+exceptions given below.
 
 ### OUT requests
 
 The firmware ignores `bRequest` and `wValue` of OUT requests and looks at
 the first data byte instead. The driver sets `wValue` to that byte, too.
+The exception is `bRequest` 0x50 in `smi2021_3f.bin`, see
+[Port C request](#port-c-request).
 
 | First byte | Request |
 |------------|---------|
@@ -203,17 +165,38 @@ the first data byte instead. The driver sets `wValue` to that byte, too.
 | 0x0d | 37 | the same with up to 32 bytes of data |
 | 0xfb | 2 | 0xfb, 0x01; clears bit 7 of 0x3080, which the host could also do with a register write (purpose unknown) |
 
-Any other `wValue` is stalled. `bRequest` 0x91 is the exception, see
-[IR receiver](#ir-receiver).
+Any other `wValue` is stalled. `bRequest` 0x91 in `smi2021_3c.bin` is an
+exception, see [IR receiver](#ir-receiver), and so is `bRequest` 0 in
+`smi2021_3f.bin`: it returns 5 bytes, the low byte of `wValue` followed by
+bytes 1 to 4 of the data of the last OUT request, and the host has no use
+for it.
+
+### Port C request
+
+`smi2021_3f.bin` only: an OUT request with `bRequest` 0x50 and no data
+stage sets `PC1` and `PC0` from `wValue`:
+
+| `wValue` | `PC1` | `PC0` |
+|----------|-------|-------|
+| 1 | high | high |
+| 2 | low | high |
+| 3 | high | low |
+| any other | low | low |
+
+The firmware leaves the direction of the pins alone; it makes `PC0` an
+output at start, but not `PC1`, so `PC1` is only driven if the host made
+it an output. What the pins control is not known.
 
 ## Modes
 
 The firmware starts in mode 3. Setting a mode configures endpoint blocks A
 and B, and resets the engines of that mode; the engines start once the host
-selects a non-zero alternate setting. The block in the second column is set
-to 0x15 and enabled, the other one is set to 0x25.
+selects a non-zero alternate setting. The block in the second column gets
+0x15 and state 01, the other one 0x25 and state 00. Presumably the latter
+is the one that sends, as endpoint `0x82`; see [Endpoint register
+blocks](hardware.md#endpoint-register-blocks).
 
-| Mode | Endpoint block | On the mode request | On `SET_INTERFACE` | 0x1880 |
+| Mode | Block with 0x15 | On the mode request | On `SET_INTERFACE` | 0x1880 |
 |------|----------------|---------------------|--------------------|--------|
 | 0x02 | B | 0x1740 = 0 | 0x1740 \|= 0x05 | 0 |
 | 0x03 | A | 0x1580 = 0x03 | 0x1580 \|= 0x80 | 0 |
@@ -272,12 +255,14 @@ otherwise this is a write. The firmware copies `size` bytes to or from
 consecutive addresses, so this reaches the I/O registers, the SRAM and all
 hardware blocks.
 
-Exceptions in `smi2021_3c.bin`:
+Exceptions, in both images:
 
 - Writing 0x81 to 0x1600 writes 0x01 instead and arms the
-  [IR receiver](#ir-receiver).
+  [IR receiver](#ir-receiver). This also makes `PC5` an input in
+  `smi2021_3c.bin`, and `PC4` in `smi2021_3f.bin`.
 - While bits 1–0 of 0x1600 are `01`, reading 0x1600 to 0x1605 returns the
-  receiver's buffer instead of the registers, and marks it as read.
+  receiver's buffer instead of the registers, and marks it as read. In
+  `smi2021_3f.bin`, which has no decoder, the buffer never changes.
 
 ### I2C transfers
 
@@ -409,9 +394,11 @@ start audio and 0x00 to stop it.
 |-----|-----|
 | Port A | all outputs after start |
 | `PA7` | pulsed by the host during initialization |
-| `PC0` | output, driven low when the USB controller is set up and on suspend; driven high by the host during initialization |
-| `PC4` | driven high by the host during initialization |
-| `PC5` | IR receiver input (`smi2021_3c.bin` only) |
+| `PC0` | output, driven low when the USB controller is set up and on suspend; driven high by the host during initialization; set by the [port C request](#port-c-request) of `smi2021_3f.bin` |
+| `PC1` | set by the [port C request](#port-c-request) of `smi2021_3f.bin` |
+| `PC2` | made an output, along with `PC0`, by `smi2021_3f.bin` at start and on suspend |
+| `PC4` | driven high by the host during initialization; made an input by `smi2021_3f.bin` when the host writes 0x81 to 0x1600 |
+| `PC5` | IR receiver input; made an input by `smi2021_3c.bin` when the host writes 0x81 to 0x1600 |
 
 ### Inputs
 
@@ -436,10 +423,10 @@ for the reset of the audio ADC and `PA7` for the reset of the decoder
 
 ## IR receiver
 
-Only `smi2021_3c.bin` contains this. It decodes pulses on `PC5`, timed with
-Timer0, into a 32 bit code, least significant bit first, after a long
-leading pulse (inferred: the NEC infrared remote protocol, which has this
-shape). The decoder runs while bits 1–0 of 0x1600 are `01`.
+Only `smi2021_3c.bin` contains the decoder. It decodes pulses on `PC5`,
+timed with Timer0, into a 32 bit code, least significant bit first, after
+a long leading pulse (inferred: the NEC infrared remote protocol, which has
+this shape). The decoder runs while bits 1–0 of 0x1600 are `01`.
 
 `bRequest` 0x91, IN, arms the decoder and returns 5 bytes: a counter of the
 decoder, its status, and three bytes of the decoded code. The status is
@@ -449,12 +436,24 @@ firmware has an IR receiver is not known.
 
 ## Differences between the images
 
-`smi2021_3f.bin` lacks the IR receiver: the `bRequest` 0x91 request and the
-special handling of 0x1600 to 0x1605. Otherwise both images implement the
-same requests, modes and register accesses, and differ only in their
-descriptors and data layout.
+Compared to `smi2021_3c.bin`, `smi2021_3f.bin`
+
+- has no IR decoder and no `bRequest` 0x91 request, but keeps the special
+  handling of 0x1600 to 0x1605, see [Bridge registers](#bridge-registers);
+- returns 5 bytes for an IN request with `bRequest` 0, see
+  [IN requests](#in-requests);
+- has the [port C request](#port-c-request);
+- makes `PC2` an output when it sets up the USB controller and on suspend;
+- knows only the endpoints `0x81` and `0x82` in `GET_STATUS` and the halt
+  feature, where `smi2021_3c.bin` also knows `0x83`.
+
+Otherwise both images implement the same requests, modes and register
+accesses, and differ only in their descriptors and data layout.
 
 ## Open questions
+
+See also [Experiments](hardware.md#experiments), which lists tests on
+hardware for these and for the questions about the inside of the bridge.
 
 - The meaning of the bits of 0x1800, 0x1880 and of the endpoint register
   blocks, beyond the values listed here, and bit 6 of 0x1740.
