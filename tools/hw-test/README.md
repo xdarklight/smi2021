@@ -141,6 +141,44 @@ can report. For the others the field stays zero -- and zero is what V4L2
 uses for a signal being present. Reading `--list-inputs` without selecting
 first would say all four have signal.
 
+## Longer and harder runs
+
+Three more tools, for what `run-tests.sh` does once and briefly. All of them
+take the standard and the input of the signal like `run-tests.sh` does,
+`SMI2021_STD` and `SMI2021_INPUT`, or as options.
+
+`stress.sh` repeats things whose rare failures a single run would miss:
+unbinding and binding the driver, which runs the whole initialization of
+the device again each time; starting and stopping each stream; video
+starting and stopping while audio runs, which switches between the audio
+only and the capture mode; a second user of each device while the first
+one streams, who must be refused; and USERPTR video, mmap audio, and the
+smallest periods and the largest buffer the driver allows. It checks every
+capture and ends with a look at the kernel log.
+
+    ./stress.sh --rounds 20
+    ./stress.sh mode-switch exclusive
+
+`soak.py` captures video and audio for as long as asked, an hour by
+default, and checks them as they arrive, since a raw capture of that
+length would not fit anywhere. It logs every anomaly with the time it
+happened, and the memory of the system once a minute. Given when mpv
+started and how long the clip is, it reports what happens at the loops of
+the clip separately, as that is the player's:
+
+    start=$(( $(date +%s) - $(ps -o etimes= -p $(pgrep -x mpv)) ))
+    ./soak.py --std ntsc --minutes 60 --loop-start $start --loop-period 239.1723
+
+The loop period is the number of frames of the clip over the frame rate;
+`make-pattern.sh` says how many frames it made.
+
+`dmabuf-test.py` covers DMABUF, which v4l2-compliance can only test with a
+second V4L2 device that exports buffers, and the board has none that will.
+It allocates the buffers from a DMA-BUF heap instead, captures into them,
+and reads every frame back through its dma-buf:
+
+    ./dmabuf-test.py --std pal --input 0 --buffers 4
+
 ## What the pattern proves, and what it does not
 
 The frame counter is a row of binary blocks rather than rendered digits, so
