@@ -166,6 +166,19 @@ static int smi2021_querystd(struct file *file, void *priv, v4l2_std_id *norm)
 	return v4l2_subdev_call(smi2021->decoder, video, querystd, norm);
 }
 
+static int smi2021_log_status(struct file *file, void *priv)
+{
+	struct smi2021 *smi2021 = video_drvdata(file);
+
+	v4l2_info(&smi2021->v4l2_dev, "firmware %02x, %s\n",
+		  le16_to_cpu(smi2021->udev->descriptor.idProduct) & 0xff,
+		  smi2021->board->name);
+	v4l2_ctrl_log_status(file, priv);
+	v4l2_device_call_all(&smi2021->v4l2_dev, 0, core, log_status);
+
+	return 0;
+}
+
 static const struct v4l2_ioctl_ops smi2021_ioctl_ops = {
 	.vidioc_querycap		= smi2021_querycap,
 	.vidioc_enum_input		= smi2021_enum_input,
@@ -190,7 +203,7 @@ static const struct v4l2_ioctl_ops smi2021_ioctl_ops = {
 	.vidioc_streamon		= vb2_ioctl_streamon,
 	.vidioc_streamoff		= vb2_ioctl_streamoff,
 
-	.vidioc_log_status		= v4l2_ctrl_log_status,
+	.vidioc_log_status		= smi2021_log_status,
 	.vidioc_subscribe_event		= v4l2_ctrl_subscribe_event,
 	.vidioc_unsubscribe_event	= v4l2_event_unsubscribe,
 };
