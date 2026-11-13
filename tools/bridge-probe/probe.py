@@ -599,7 +599,8 @@ def cmd_info(bridge, args):
     for addr, name in ((0x1580, 'mode 3 engine'), (0x1600, 'stream/IR'),
                        (0x1740, 'audio'), (0x1800, 'video'),
                        (0x1880, 'stream source'), (0x3080, 'system'),
-                       (0x3100, 'mode 4 engine')):
+                       (0x3100, 'mode 4 engine'),
+                       (0x31a5, 'board id')):
         print(f'0x{addr:04x} {name:>13}: 0x{bridge.read8(addr):02x}')
     for port, (pin, ddr, prt) in GPIO_PORTS.items():
         print(f'port {port}: DDR 0x{bridge.read8(ddr):02x} PORT '
