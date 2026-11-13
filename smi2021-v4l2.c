@@ -436,6 +436,13 @@ static void smi2021_parse_trc(struct smi2021 *smi2021, u8 trc)
 
 		buf = smi2021_get_buf(smi2021);
 		smi2021->cur_buf = buf;
+
+		/*
+		 * Without a free buffer the frame is dropped, but it still
+		 * counts, so that the gap shows in the sequence numbers.
+		 */
+		if (!buf)
+			smi2021->sequence++;
 	}
 
 	if (!buf)

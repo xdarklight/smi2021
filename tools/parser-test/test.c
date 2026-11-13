@@ -91,6 +91,8 @@ struct smi2021 {
 };
 
 static int frames_done, frames_error;
+static u32 sequences[8];
+static int nsequences;
 
 static unsigned long long ktime_get_ns(void)
 {
@@ -108,6 +110,10 @@ static void vb2_buffer_done(struct vb2_buffer *vb, enum vb2_buffer_state state)
 		frames_done++;
 	else
 		frames_error++;
+
+	if (nsequences < (int)ARRAY_SIZE(sequences))
+		sequences[nsequences++] =
+			((struct vb2_v4l2_buffer *)vb)->sequence;
 }
 
 /* Comes from the format code, which is not extracted */
@@ -292,6 +298,54 @@ static int run(const struct test *t, unsigned int chunk)
 	return !pass;
 }
 
+/*
+ * A frame that finds no free buffer is dropped, but it still counts: with a
+ * single buffer, given back after frame 1 and again after frame 2 was
+ * dropped, the frames handed out must be numbered 0 and 2.
+ */
+static int run_sequence(void)
+{
+	static u8 mem[SMI2021_BYTES_PER_LINE * 480];
+	struct smi2021 s = { .cur_height = 480 };
+	struct smi2021_buf *buf = &bufs[0];
+	size_t first;
+	bool pass;
+
+	list_init(&s.avail_bufs);
+	memset(buf, 0, sizeof(*buf));
+	buf->mem = mem;
+	buf->in_blank = true;
+	list_add_tail(&buf->list, &s.avail_bufs);
+	nsequences = 0;
+
+	stream_len = 0;
+	emit_field(0, 1, 121, 242, false);
+	emit_field(1, 0, 0, 242, false);
+	emit_field(1, 1, 0, 242, false);
+	emit_field(2, 0, 0, 242, false);
+	emit_field(2, 1, 0, 242, false);
+	first = stream_len;
+	emit_field(3, 0, 0, 242, false);
+	emit_field(3, 1, 0, 242, false);
+	emit_field(4, 0, 0, 2, false);
+
+	smi2021_parse_video(&s, stream, first);
+	/* Frame 1 is done, frame 2 went without a buffer */
+	memset(buf, 0, sizeof(*buf));
+	buf->mem = mem;
+	buf->in_blank = true;
+	list_add_tail(&buf->list, &s.avail_bufs);
+	smi2021_parse_video(&s, stream + first, stream_len - first);
+
+	pass = nsequences == 2 && sequences[0] == 0 && sequences[1] == 2;
+	printf("%-44s sequence", "dropped frames are counted");
+	for (int i = 0; i < nsequences; i++)
+		printf(" %u", sequences[i]);
+	printf(" %s\n", pass ? "PASS" : "FAIL");
+
+	return !pass;
+}
+
 int main(void)
 {
 	static const struct test tests[] = {
@@ -310,6 +364,7 @@ int main(void)
 	for (t = 0; t < ARRAY_SIZE(tests); t++)
 		for (c = 0; c < ARRAY_SIZE(chunks); c++)
 			fail |= run(&tests[t], chunks[c]);
+	fail |= run_sequence();
 
 	printf("\n%s\n", fail ? "SOME TESTS FAILED" : "all parser tests passed");
 
