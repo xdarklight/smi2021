@@ -221,7 +221,8 @@ to 0x15 and enabled, the other one is set to 0x25.
 | 0x05 | A | 0x1800 = 0, 0x1740 = 0 | 0x1800 \|= 0x0d, 0x1740 \|= 0x05 | 1 |
 
 Mode 5 is video and audio capture from the decoder and the audio ADC. Mode
-2 presumably is audio only. What the engines of modes 3 and 4 do is not
+2 is audio only, and sends the audio data without chunks, see
+[Isochronous stream](#isochronous-stream). What the engines of modes 3 and 4 do is not
 known. The driver uses mode 3 as standby, which is harmless as it selects
 alternate setting 0 at the same time.
 
@@ -333,8 +334,8 @@ acknowledges the request, so the host needs no delays between requests.
 ## Isochronous stream
 
 The firmware doesn't touch the stream data; the hardware engines produce it.
-The stream consists of chunks of 1024 bytes. Each chunk starts with a big
-endian 32 bit magic word that identifies its payload:
+In mode 5 the stream consists of chunks of 1024 bytes. Each chunk starts
+with a big endian 32 bit magic word that identifies its payload:
 
 | Magic | Payload |
 |-------|---------|
@@ -343,6 +344,15 @@ endian 32 bit magic word that identifies its payload:
 
 The driver relies on every isochronous packet holding a whole number of
 chunks.
+
+In mode 2 there are no chunks (observed, with `smi2021_3c.bin` and alternate
+setting 2). Each packet holds the next piece of the audio data as it is, one
+packet per microframe of 48 bytes, which is 6 frames, with an occasional
+longer one. The data runs on across packets: a packet need not start at a
+sample, and different streams were seen to start at 0 and at 2 bytes into
+one. The first packet of a stream may also begin with bytes that are not
+audio data, about 20 of them. After the audio engine is stopped, the
+remaining packets come back as missed.
 
 **Video data** is the 8 bit ITU-R BT.656 output of the decoder: UYVY 4:2:2
 lines of 1440 bytes, framed by timing reference codes (0xff 0x00 0x00 and a

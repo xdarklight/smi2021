@@ -104,7 +104,11 @@ struct smi2021 {
 	 * by the videobuf2 callbacks and by the pcm trigger work.
 	 */
 	struct mutex			stream_lock;
-	/* Mode of the running stream, standby while nothing is streaming */
+	/*
+	 * Mode of the running stream, standby while nothing is streaming.
+	 * Also read by the URB completion handler, which only runs while it
+	 * does not change.
+	 */
 	u8				stream_mode;
 	/* Whether the video device and the pcm device want data */
 	bool				video_wanted;

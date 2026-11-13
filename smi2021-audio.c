@@ -30,8 +30,8 @@
 					 SMI2021_AUDIO_SAMPLE_SIZE)
 
 /*
- * Audio data arrives in whole chunks, so shorter periods would elapse in
- * bursts. The buffer is in vmalloc memory and not limited by the hardware,
+ * During a video capture, audio data arrives in whole chunks, so shorter
+ * periods would elapse in bursts. The buffer is in vmalloc memory and not limited by the hardware,
  * 256 KiB hold about 680 ms.
  */
 #define SMI2021_AUDIO_PERIOD_MIN	round_up(SMI2021_CHUNK_DATA_SIZE, \
@@ -170,8 +170,9 @@ static void smi2021_pcm_align(struct smi2021 *smi2021,
 }
 
 /*
- * Copy the audio data of one chunk into the ring buffer. Called with the pcm
- * stream lock held. Returns whether a period has elapsed.
+ * Copy the audio data of one chunk, or of one packet in the audio only mode,
+ * into the ring buffer. Called with the pcm stream lock held. Returns whether
+ * a period has elapsed.
  *
  * The samples in the ring buffer start at multiples of the sample size, so
  * the write pointer tells how many bytes of the last sample the chunk has to

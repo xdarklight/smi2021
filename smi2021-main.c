@@ -30,12 +30,12 @@
 #define SMI2021_USB_INDEX		0x00
 
 /*
- * Alternate settings without and with the isochronous endpoint. Both capture
- * modes use the same one: the stream is framed in chunks of
- * SMI2021_CHUNK_SIZE bytes, which only fit whole into the packets of
- * alternate setting 2. The vendor driver picks alternate setting 1 when it
- * captures audio alone, whose packets are one byte too short for a chunk, and
- * how it frames the data there is not known.
+ * Alternate settings without and with the isochronous endpoint. The capture
+ * mode frames the stream in chunks of SMI2021_CHUNK_SIZE bytes, which only
+ * fit whole into the packets of alternate setting 2. The audio only mode
+ * sends a few frames of audio per packet, with no chunks, which alternate
+ * setting 2 carries as well; the vendor driver picks alternate setting 1 for
+ * it.
  */
 #define SMI2021_ALT_IDLE		0
 #define SMI2021_ALT_STREAM		2
@@ -293,6 +293,15 @@ static void smi2021_process_packet(struct smi2021 *smi2021, const u8 *p,
 				   unsigned int size)
 {
 	unsigned int i;
+
+	/*
+	 * The audio only mode sends the audio data as it is, the same stream
+	 * that the capture mode splits up into audio chunks.
+	 */
+	if (smi2021->stream_mode == SMI2021_MODE_AUDIO) {
+		smi2021_parse_audio(smi2021, p, size);
+		return;
+	}
 
 	if (size % SMI2021_CHUNK_SIZE) {
 		dev_dbg_ratelimited(smi2021->dev,
