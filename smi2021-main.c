@@ -147,6 +147,8 @@ int smi2021_ctrl_read(struct usb_device *udev, u16 value, void *data,
 static int smi2021_send_reg_msg(struct smi2021 *smi2021,
 				const struct smi2021_reg_msg *msg)
 {
+	lockdep_assert_held(&smi2021->reg_lock);
+
 	return smi2021_ctrl_write(smi2021->udev, msg->head, msg, sizeof(*msg));
 }
 

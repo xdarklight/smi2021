@@ -504,10 +504,12 @@ static const struct vb2_ops smi2021_video_qops = {
 	.stop_streaming		= smi2021_stop_streaming,
 };
 
-/* Must be called with stream_lock held and the isochronous transfers stopped */
+/* Must be called with the isochronous transfers stopped */
 void smi2021_clear_queue(struct smi2021 *smi2021, enum vb2_buffer_state state)
 {
 	struct smi2021_buf *buf, *tmp;
+
+	lockdep_assert_held(&smi2021->stream_lock);
 
 	scoped_guard(spinlock_irqsave, &smi2021->buf_lock) {
 		list_for_each_entry_safe(buf, tmp, &smi2021->avail_bufs, list) {
