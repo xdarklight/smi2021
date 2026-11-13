@@ -27,6 +27,13 @@ Video 1 to Video 4, and a single audio connector. `run-tests.sh` therefore
 loads the driver with `card=2`, and `SMI2021_INPUT` says which of the four
 connectors the cable is in, counted from zero.
 
+`SMI2021_FIRMWARE` picks the firmware the driver uploads, by the USB product
+id it gives the device: 0x3c, the default, or 0x3f. The device keeps a
+firmware until it loses power, so replug it before switching, and the
+firmware upload step fails if the device still runs another one:
+
+    SMI2021_FIRMWARE=0x3f ./run-tests.sh
+
 Because there is one audio connector and the CS5340 is a stereo ADC, the
 two channels of the ALSA device cannot be independent. Whether the one input
 ends up duplicated onto both, or on one with the other silent, is a property
@@ -122,9 +129,15 @@ step 10 wants the composite cable pulled, and steps 11 and 12 are the ones
 that can take the board down -- so they only run with `--attended`. After a
 crash, `--from N` picks up where the breadcrumb says it stopped.
 
-A capture can also be checked on its own:
+The raw captures go to `SMI2021_CAPTURES`, `/tmp/smi2021-captures` by
+default, which is in memory on the board: writing them to the SD card at
+20 MB/s stalled `v4l2-ctl` for up to 1.5 s at a time, and the driver had to
+drop frames for want of buffers, which looked like a fault of the device.
+A full run keeps about 540 MB there. A capture can also be checked on its
+own:
 
-    ./check-capture.py --video results/both.uyvy --audio results/both.s32
+    ./check-capture.py --video /tmp/smi2021-captures/both.uyvy \
+        --audio /tmp/smi2021-captures/both.s32
 
 ### The input sweep
 

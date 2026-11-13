@@ -16,6 +16,11 @@ set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 results=${SMI2021_RESULTS:-$here/results}
 breadcrumb=$results/breadcrumb
+# The raw captures go to memory: writing 20 MB/s to the SD card of the board
+# stalled v4l2-ctl for up to 1.5 s at a time, and the driver had to drop
+# frames for want of buffers. The breadcrumb stays on the card, as it has to
+# survive a crash.
+captures=${SMI2021_CAPTURES:-/tmp/smi2021-captures}
 module=${SMI2021_MODULE:-$here/../../smi2021.ko}
 std=${SMI2021_STD:-ntsc}
 duration=${SMI2021_DURATION:-10}
@@ -26,6 +31,10 @@ card=${SMI2021_CARD:-2}
 # Which of those connectors the composite cable is actually in, counted from
 # 0, so that the input sweep knows which one should see a signal.
 connected=${SMI2021_INPUT:-0}
+# Firmware for the driver to upload, named by the USB product id it gives the
+# device. The device keeps the one it has until it loses power, so a device
+# that runs another one has to be replugged first.
+firmware=${SMI2021_FIRMWARE:-0x3c}
 
 attended=0
 from=1
@@ -47,9 +56,9 @@ usage: $0 [--from N] [--only N] [--risky] [--list]
            a cable pulled, and steps 11 and 12 can wedge the board. Without
            it the run stops before them.
 
-Environment: SMI2021_RESULTS, SMI2021_MODULE, SMI2021_STD (ntsc|pal),
-SMI2021_DURATION, SMI2021_CARD, SMI2021_INPUT, SMI2021_CONNECTOR,
-SMI2021_AUDIO_OUT, SMI2021_PYTHON
+Environment: SMI2021_RESULTS, SMI2021_CAPTURES, SMI2021_MODULE,
+SMI2021_STD (ntsc|pal), SMI2021_DURATION, SMI2021_CARD, SMI2021_INPUT,
+SMI2021_FIRMWARE, SMI2021_CONNECTOR, SMI2021_AUDIO_OUT, SMI2021_PYTHON
 EOF
 	exit "${1:-0}"
 }
@@ -75,7 +84,7 @@ while [ $# -gt 0 ]; do
 	esac
 done
 
-mkdir -p "$results"
+mkdir -p "$results" "$captures"
 
 say() { printf '\n== %s\n' "$*"; }
 fail() { printf 'FAIL: %s\n' "$*" >&2; failures=$((failures + 1)); }
@@ -112,7 +121,8 @@ load_module() {
 	for dep in $(modinfo -F depends "$module" | tr , ' '); do
 		modprobe "$dep" || { fail "could not load $dep"; return 1; }
 	done
-	insmod "$module" "card=$card" || { fail 'insmod failed'; return 1; }
+	insmod "$module" "card=$card" "firmware_version=$firmware" ||
+		{ fail 'insmod failed'; return 1; }
 }
 
 video_device() {
@@ -173,7 +183,7 @@ prepare_video() {
 
 capture_video() {
 	device=$(video_device) || { fail "no smi2021 video device"; return 1; }
-	out=$results/$1.uyvy
+	out=$captures/$1.uyvy
 	timeout $((duration + 20)) v4l2-ctl -d "$device" \
 		--stream-mmap --stream-count="$2" --stream-to="$out" \
 		>/dev/null || { fail "$1: capture failed"; return 1; }
@@ -182,7 +192,7 @@ capture_video() {
 
 capture_audio() {
 	device=$(audio_device) || { fail "no smi2021 audio device"; return 1; }
-	out=$results/$1.s32
+	out=$captures/$1.s32
 	timeout $((duration + 20)) arecord -D "$device" -f S32_LE -c 2 -r 48000 \
 		-d "$duration" -t raw "$out" 2>/dev/null \
 		|| { fail "$1: arecord failed"; return 1; }
@@ -216,6 +226,9 @@ run_step() {
 		load_module
 		sleep 5
 		echo 'after:'; lsusb -d 1c88: || fail 'device did not re-enumerate'
+		pid=$(printf '%04x' "$firmware")
+		lsusb -d "1c88:$pid" >/dev/null ||
+			fail "device does not run firmware $firmware, replug it"
 		;;
 	probe)
 		say 'what probe registered'
@@ -231,11 +244,11 @@ run_step() {
 	capture-video)
 		say 'video only'
 		prepare_video && capture_video video "$(frames "$duration")" &&
-			check --video "$results/video.uyvy"
+			check --video "$captures/video.uyvy"
 		;;
 	capture-audio)
 		say 'audio only, with the video engine stopped'
-		capture_audio audio && check --audio "$results/audio.s32"
+		capture_audio audio && check --audio "$captures/audio.s32"
 		;;
 	capture-both)
 		say 'video and audio at the same time'
@@ -247,7 +260,7 @@ run_step() {
 		sleep 1
 		capture_audio both
 		wait "$video_pid" || fail 'video capture failed'
-		check --video "$results/both.uyvy" --audio "$results/both.s32"
+		check --video "$captures/both.uyvy" --audio "$captures/both.s32"
 		;;
 	switch-std)
 		say 'standard detection, and capturing in the wrong standard'
@@ -271,7 +284,7 @@ run_step() {
 			--stream-to=/dev/null >/dev/null 2>&1 ||
 			fail "capturing in $other from a $std source did not finish"
 		prepare_video && capture_video std "$(frames 4)" &&
-			check --video "$results/std.uyvy"
+			check --video "$captures/std.uyvy"
 		;;
 	input-sweep)
 		say 'which input sees the signal'
