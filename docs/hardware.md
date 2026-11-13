@@ -498,9 +498,11 @@ The two engines are at 0x1780 and 0x3180 and are identical:
 
 The block repeats every 0x40 bytes: 0x17c0 reads as 0x1780 (observed).
 Each engine has its own +0x25 to +0x29: a write at 0x17a6 doesn't show at
-0x31a6, though both read the same, c8 32 d0 dd 06, after power-up
-(observed). +0x27 and +0x29 came back swapped in a read that started at
-+0x23, but not when read on their own or from +0x25; why is unknown.
+0x31a6 (observed). After power-up, both engines read the same there with
+`smi2021_3c.bin`: c8 32 d0 dd 06 at one time, c8 32 06 dd d0 at another,
+in reads that both started at +0x25 (observed). So +0x27 and +0x29 trade
+places, between power cycles or between reads; why is unknown. +0x25 of the
+second engine reads 0xc8 with `smi2021_3f.bin` as well (observed).
 
 To run a transfer, the firmware
 
