@@ -12,6 +12,7 @@
 #include <linux/bits.h>
 #include <linux/build_bug.h>
 #include <linux/cleanup.h>
+#include <linux/idr.h>
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/string.h>
@@ -23,6 +24,8 @@
 #include "smi2021.h"
 
 #define SMI2021_USB_VENDOR_ID		0x1c88
+/* All devices enumerate with this id until their firmware is loaded */
+#define SMI2021_USB_BOOTLOADER_ID	0x0007
 
 /* Vendor specific control request used for all register access */
 #define SMI2021_USB_REQUEST		0x01
@@ -646,6 +649,9 @@ void smi2021_stop_streaming(struct vb2_queue *vq)
 	smi2021_clear_queue(smi2021, VB2_BUF_STATE_ERROR);
 }
 
+/* Allocates the device numbers */
+static DEFINE_IDA(smi2021_ida);
+
 static void smi2021_release(struct v4l2_device *v4l2_dev)
 {
 	struct smi2021 *smi2021 = container_of(v4l2_dev, struct smi2021,
@@ -662,6 +668,7 @@ static void smi2021_release(struct v4l2_device *v4l2_dev)
 	mutex_destroy(&smi2021->v4l2_lock);
 	mutex_destroy(&smi2021->vb_queue_lock);
 
+	ida_free(&smi2021_ida, smi2021->nr);
 	kfree(smi2021);
 }
 
@@ -680,39 +687,78 @@ static struct saa7115_platform_data smi2021_decoder_pdata = {
 	.saa7113_r10_vrln = &smi2021_decoder_vrln,
 };
 
+/*
+ * All inputs of the decoder that a board may have connected. The USB product
+ * id depends on the firmware that was uploaded rather than on the board, so
+ * the inputs of a board can not be detected; offer all of them unless the
+ * card module parameter selects a board.
+ */
+static const struct smi2021_input smi2021_all_inputs[] = {
+	{ "Composite 0", SAA7115_COMPOSITE0 },
+	{ "Composite 1", SAA7115_COMPOSITE1 },
+	{ "Composite 2", SAA7115_COMPOSITE2 },
+	{ "Composite 3", SAA7115_COMPOSITE3 },
+	{ "S-Video", SAA7115_SVIDEO1 },
+};
+
 static const struct smi2021_input smi2021_dc60_inputs[] = {
 	{ "Composite", SAA7115_COMPOSITE0 },
 	{ "S-Video", SAA7115_SVIDEO1 },
 };
 
-static const struct smi2021_input smi2021_easycap002_inputs[] = {
-	{ "Composite 0", SAA7115_COMPOSITE0 },
-	{ "Composite 1", SAA7115_COMPOSITE1 },
-	{ "Composite 2", SAA7115_COMPOSITE2 },
-	{ "Composite 3", SAA7115_COMPOSITE3 },
+/* Values of the card module parameter */
+enum smi2021_board_type {
+	SMI2021_BOARD_ALL_INPUTS,
+	SMI2021_BOARD_DC60,
+	SMI2021_BOARD_EASYCAP002,
 };
 
-static const struct smi2021_board smi2021_dc60 = {
-	.inputs = smi2021_dc60_inputs,
-	.num_inputs = ARRAY_SIZE(smi2021_dc60_inputs),
+static const struct smi2021_board smi2021_boards[] = {
+	[SMI2021_BOARD_ALL_INPUTS] = {
+		.name = "all inputs",
+		.inputs = smi2021_all_inputs,
+		.num_inputs = ARRAY_SIZE(smi2021_all_inputs),
+	},
+	[SMI2021_BOARD_DC60] = {
+		.name = "EasyCAP DC60",
+		.inputs = smi2021_dc60_inputs,
+		.num_inputs = ARRAY_SIZE(smi2021_dc60_inputs),
+	},
+	[SMI2021_BOARD_EASYCAP002] = {
+		.name = "EasyCAP 002",
+		/* The four composite inputs */
+		.inputs = smi2021_all_inputs,
+		.num_inputs = 4,
+	},
 };
 
-static const struct smi2021_board smi2021_easycap002 = {
-	.inputs = smi2021_easycap002_inputs,
-	.num_inputs = ARRAY_SIZE(smi2021_easycap002_inputs),
-};
+static unsigned int card[8];
+module_param_array(card, uint, NULL, 0444);
+MODULE_PARM_DESC(card,
+		 "Board of each device, by device number: 0 = all inputs (default), 1 = EasyCAP DC60, 2 = EasyCAP 002");
 
-#define SMI2021_DEVICE(pid, board) \
-	USB_DEVICE(SMI2021_USB_VENDOR_ID, pid), \
-	.driver_info = (kernel_ulong_t)(board)
+static const struct smi2021_board *smi2021_get_board(struct smi2021 *smi2021)
+{
+	unsigned int type = SMI2021_BOARD_ALL_INPUTS;
+
+	if (smi2021->nr < ARRAY_SIZE(card))
+		type = card[smi2021->nr];
+
+	if (type >= ARRAY_SIZE(smi2021_boards)) {
+		dev_warn(smi2021->dev, "invalid card %u, offering all inputs\n",
+			 type);
+		type = SMI2021_BOARD_ALL_INPUTS;
+	}
+
+	return &smi2021_boards[type];
+}
 
 static const struct usb_device_id smi2021_usb_device_id_table[] = {
-	/* All devices enumerate with this id until their firmware is loaded */
-	{ SMI2021_DEVICE(0x0007, NULL) },
-	{ SMI2021_DEVICE(0x003c, &smi2021_dc60) },
-	{ SMI2021_DEVICE(0x003d, &smi2021_dc60) },
-	{ SMI2021_DEVICE(0x003e, &smi2021_easycap002) },
-	{ SMI2021_DEVICE(0x003f, &smi2021_easycap002) },
+	{ USB_DEVICE(SMI2021_USB_VENDOR_ID, SMI2021_USB_BOOTLOADER_ID) },
+	{ USB_DEVICE(SMI2021_USB_VENDOR_ID, 0x003c) },
+	{ USB_DEVICE(SMI2021_USB_VENDOR_ID, 0x003d) },
+	{ USB_DEVICE(SMI2021_USB_VENDOR_ID, 0x003e) },
+	{ USB_DEVICE(SMI2021_USB_VENDOR_ID, 0x003f) },
 	{ }
 };
 MODULE_DEVICE_TABLE(usb, smi2021_usb_device_id_table);
@@ -720,7 +766,6 @@ MODULE_DEVICE_TABLE(usb, smi2021_usb_device_id_table);
 static int smi2021_usb_probe(struct usb_interface *intf,
 			     const struct usb_device_id *devid)
 {
-	const struct smi2021_board *board = (const void *)devid->driver_info;
 	struct usb_device *udev = interface_to_usbdev(intf);
 	struct i2c_board_info decoder_info = {
 		I2C_BOARD_INFO("saa7115_auto", SMI2021_DECODER_I2C_ADDR),
@@ -731,7 +776,7 @@ static int smi2021_usb_probe(struct usb_interface *intf,
 	struct smi2021 *smi2021;
 	int rc;
 
-	if (!board)
+	if (devid->idProduct == SMI2021_USB_BOOTLOADER_ID)
 		return smi2021_bootloader_probe(intf);
 
 	alt = usb_altnum_to_altsetting(intf, SMI2021_ALT_STREAM);
@@ -746,9 +791,16 @@ static int smi2021_usb_probe(struct usb_interface *intf,
 	if (!smi2021)
 		return -ENOMEM;
 
+	rc = ida_alloc(&smi2021_ida, GFP_KERNEL);
+	if (rc < 0) {
+		kfree(smi2021);
+		return rc;
+	}
+
+	smi2021->nr = rc;
 	smi2021->dev = &intf->dev;
 	smi2021->udev = udev;
-	smi2021->board = board;
+	smi2021->board = smi2021_get_board(smi2021);
 	smi2021->ifnum = alt->desc.bInterfaceNumber;
 	smi2021->iso_ep = usb_endpoint_num(&ep->desc);
 	/* 3072 bytes, as the endpoint has two additional transactions */
@@ -811,7 +863,7 @@ static int smi2021_usb_probe(struct usb_interface *intf,
 
 	v4l2_subdev_call(smi2021->decoder, video, s_std, smi2021->cur_norm);
 	v4l2_subdev_call(smi2021->decoder, video, s_routing,
-			 board->inputs[smi2021->cur_input].type, 0, 0);
+			 smi2021->board->inputs[smi2021->cur_input].type, 0, 0);
 
 	/*
 	 * Audio arrives in the same URBs as the video, so set up the audio
@@ -831,6 +883,9 @@ static int smi2021_usb_probe(struct usb_interface *intf,
 
 	usb_set_intfdata(intf, smi2021);
 
+	dev_info(smi2021->dev, "device %u, %s\n", smi2021->nr,
+		 smi2021->board->name);
+
 	return 0;
 
 err_snd:
@@ -848,6 +903,7 @@ err_free:
 	mutex_destroy(&smi2021->reg_lock);
 	mutex_destroy(&smi2021->v4l2_lock);
 	mutex_destroy(&smi2021->vb_queue_lock);
+	ida_free(&smi2021_ida, smi2021->nr);
 	kfree(smi2021);
 
 	return rc;

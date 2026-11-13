@@ -9,19 +9,36 @@ to be submitted upstream; they drop straight into
 
 ## Hardware
 
-| USB ID      | Device        | Inputs                      |
-|-------------|---------------|-----------------------------|
-| `1c88:0007` | bootloader    | needs a firmware upload     |
-| `1c88:003c` | EasyCAP DC60+ | 1x composite, 1x S-Video    |
-| `1c88:003d` | EasyCAP DC60  | 1x composite, 1x S-Video    |
-| `1c88:003e` | EasyCAP 002   | 4x composite                |
-| `1c88:003f` | EasyCAP 002   | 4x composite                |
+Known devices are the EasyCAP DC60(+), with one composite and one S-Video
+input, and the EasyCAP 002, with four composite inputs. Video is decoded by a
+Philips SAA7113 or its GM7113C clone, both handled by the in-tree `saa7115`
+driver. Audio is captured by a Cirrus Logic CS5340 and arrives interleaved
+with the video on the same isochronous endpoint, so it is exposed as an ALSA
+PCM capture device by this driver rather than by `snd-usb-audio`.
 
-Video is decoded by a Philips SAA7113 or its GM7113C clone, both handled by
-the in-tree `saa7115` driver. Audio is captured by a Cirrus Logic CS5340 and
-arrives interleaved with the video on the same isochronous endpoint, so it is
-exposed as an ALSA PCM capture device by this driver rather than by
-`snd-usb-audio`.
+| USB ID                  | State                                          |
+|-------------------------|------------------------------------------------|
+| `1c88:0007`             | bootloader, waiting for a firmware upload      |
+| `1c88:003c`–`1c88:003f` | running the firmware with the same number     |
+
+The USB ID after the upload depends on the firmware, not on the board, so the
+driver can not tell which inputs a board has. By default it offers all of
+them: four composite inputs and S-Video. The input status of
+`VIDIOC_ENUMINPUT` shows whether the current input carries a signal.
+
+To offer only the inputs a board actually has, set the `card` module
+parameter for it. Devices are numbered from 0 in the order in which they
+appear; the kernel log shows each device's number.
+
+| `card` | Inputs                                   |
+|--------|------------------------------------------|
+| 0      | all inputs (default)                     |
+| 1      | EasyCAP DC60: composite and S-Video      |
+| 2      | EasyCAP 002: four composite inputs       |
+
+```bash
+modprobe smi2021 card=2
+```
 
 Inputs are selected with the standard V4L2 input API, for example:
 
@@ -70,13 +87,9 @@ follows the current kernel APIs, so older kernels may lack some of them.
 ## Firmware
 
 These devices have no on-board flash. They enumerate as `1c88:0007` and need
-a firmware upload before the capture device appears. Install the blob that
-matches your device as `/lib/firmware/smi2021_3c.bin`, `smi2021_3e.bin` or
-`smi2021_3f.bin`.
-
-All variants report the same USB ID while in bootloader mode, so the driver
-simply uploads the first firmware it finds. If more than one is installed,
-pick one explicitly:
+a firmware upload before the capture device appears. By default the driver
+uploads `/lib/firmware/smi2021_3c.bin`. The `firmware_version` module
+parameter selects `smi2021_3e.bin` or `smi2021_3f.bin` instead:
 
 ```bash
 modprobe smi2021 firmware_version=0x3f

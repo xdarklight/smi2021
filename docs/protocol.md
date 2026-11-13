@@ -130,7 +130,7 @@ used by the driver, consists of vendor requests (`bmRequestType` 0x40 or
 3. **Start the firmware**: OUT, `wValue` 0x07, 2 bytes: 0x07, 0x00.
 
 All variants use the same USB id while in the bootloader, so the host can't
-tell which firmware a device needs.
+tell which firmware a device came with.
 
 ## USB device
 

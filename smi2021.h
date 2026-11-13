@@ -69,6 +69,7 @@ struct smi2021_input {
 };
 
 struct smi2021_board {
+	const char			*name;
 	const struct smi2021_input	*inputs;
 	unsigned int			num_inputs;
 };
@@ -76,6 +77,8 @@ struct smi2021_board {
 struct smi2021 {
 	struct device			*dev;
 	struct usb_device		*udev;
+	/* Device number, which selects the card= module parameter */
+	unsigned int			nr;
 	const struct smi2021_board	*board;
 
 	/* Serializes register accesses, some of which take several requests */

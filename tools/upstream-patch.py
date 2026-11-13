@@ -54,8 +54,10 @@ driver assembles interlaced UYVY frames. The audio data is 24 bit stereo
 PCM at 48 kHz, exposed as an ALSA capture device.
 
 The decoder is handled by the saa7115 driver, which tells a saa7113 from
-a gm7113c itself. Depending on the product id, the devices have either
-one composite and one S-Video input, or four composite inputs.
+a gm7113c itself. The devices have either one composite and one S-Video
+input, or four composite inputs. As the product id depends on the
+uploaded firmware rather than on the board, the driver offers all of
+these inputs, unless the card module parameter selects a board.
 
 This is based on the out of tree driver by Jon Arne Jørgensen, which was
 submitted as an RFC in 2013, reworked for the current kernel APIs, with
