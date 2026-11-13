@@ -1,96 +1,118 @@
 # smi2021
 
-The purpose of this repository is to merge and clean up several of the forks available. A merge into the mainline kernel seems possible; the binary blob is under the GPL, but we don't have the source.
+Linux driver for Somagic SMI2021 based analog video capture devices, sold
+under names such as EasyCAP DC60(+) and EasyCAP 002.
 
-## Minimal requirement
+The files in the top level of this repository are the driver as it is meant
+to be submitted upstream; they drop straight into
+`drivers/media/usb/smi2021/` of a Linux tree.
 
-- Kernel version must be greater than or equal to 3.12
+## Hardware
 
-## Installing
+| USB ID      | Device        | Inputs                      |
+|-------------|---------------|-----------------------------|
+| `1c88:0007` | bootloader    | needs a firmware upload     |
+| `1c88:003c` | EasyCAP DC60+ | 1x composite, 1x S-Video    |
+| `1c88:003d` | EasyCAP DC60  | 1x composite, 1x S-Video    |
+| `1c88:003e` | EasyCAP 002   | 4x composite                |
+| `1c88:003f` | EasyCAP 002   | 4x composite                |
 
-### From you distro.
+Video is decoded by a Philips SAA7113 or its GM7113C clone, both handled by
+the in-tree `saa7115` driver. Audio is captured by a Cirrus Logic CS5340 and
+arrives interleaved with the video on the same isochronous endpoint, so it is
+exposed as an ALSA PCM capture device by this driver rather than by
+`snd-usb-audio`.
 
-Ready distro:
+Inputs are selected with the standard V4L2 input API, for example:
 
-- Arch Linux - https://aur.archlinux.org/packages/somagic-easycap-smi2021-git/
+```bash
+v4l2-ctl -d /dev/video0 --list-inputs
+```
 
-> If you've packaged it for another distro, please send me the link and I'll add it.
+## Building
 
-### Manual build and installation
+### In a kernel tree
 
-#### Get source
+Copy `*.c`, `*.h`, `Kconfig` and `Makefile` into
+`drivers/media/usb/smi2021/`, then add to `drivers/media/usb/Kconfig`:
 
 ```
-git clone git://github.com/Manouchehri/smi2021.git
-cd smi2021/
+source "drivers/media/usb/smi2021/Kconfig"
 ```
 
-#### Build
+and to `drivers/media/usb/Makefile`:
 
-You can build that module one of the two options: as `internal` or as `external` (out-of-tree) module.
-> if you have been collecting both ways - don't forget that in every way the final installation path of the module are different:
->
-> **internal** = ``` /lib/modules/`uname -r`/kernel/drivers/media/usb/smi2021/smi2021.ko ```
->
-> **external** = ``` /lib/modules/`uname -r`/extra/smi2021.ko ```
->
-> It might be possible - two different module will be in two different place at the same time - don't forget to delete the old module if you change the type of Assembly.
+```
+obj-$(CONFIG_VIDEO_SMI2021) += smi2021/
+```
 
-1. Build as **internal**:
-  1.  Place folder `smi2021` from **Get source** step in you kernel source tree into folder `drivers/media/usb/`
-  2.  In **menuconfig** (or other configuration utilits as xmenuconfig, etc...) Chose ```Device Drivers -> Multimedia support -> Media USB Adapters -> Somagic SMI2021 USB video/audio capture support``` as module or build-in
-  3.  Build you kernel with modules and instal it. If you chose `Somagic SMI2021 USB video/audio capture support` as module - install modules too.
-    
-    > On build it as module - that module installs in ```/lib/modules/`uname -r`/kernel/drivers/media/usb/smi2021/smi2021.ko```
+Enable `CONFIG_VIDEO_SMI2021` and build as usual.
 
-2. Build as **external** (out-of-tree) module.
-  1. You **MUST** verify all dependency:
-    - `VIDEO_DEV && I2C && SND && USB`
-    - `SND_PCM`
-    - `VIDEO_SAA711X` = `Device Drivers -> Multimedia support -> Encoders, decoders, sensors and other helper chips -> Philips SAA7111/3/4/5 video decoders`
-    - `VIDEOBUF2_VMALLOC` = I simple chose in menuconfig: `Device Drivers -> Multimedia support -> Media USB Adapters -> USB Video Class` - it have needed dependency for `VIDEOBUF2_VMALLOC`
-    
-    > Im most case, in blank `Encoders, decoders, sensors and other helper chips` and `Media USB Adapters` - when you not select `Cameras/video grabbers support`.
-    > Also sufficient **UN**select `Autoselect ancillary drivers (tuners, sensors, i2c, frontends)` for view `Encoders, decoders, sensors and other helper chips` in list. 
-  2. As is "https://www.kernel.org/doc/Documentation/kbuild/modules.txt".
-    
-    > NOTE: "modules_prepare" will not build Module.symvers even if CONFIG_MODVERSIONS is set; therefore, a full kernel build needs to be executed to make module versioning work.
-  To build against the running kernel use: ```make -C /lib/modules/`uname -r`/build M=$PWD```
-  3. Build module with run `make` in source directory. You can use targets: `modules` as default `modules_install clean help` and `clean_all`. You can use env `CROSS_COMPILE, ARCH, KDIR` and `-j` too.
-  4. Install builded module with `make modules_install`.
-    
-    > NOTE: It installs in ```/lib/modules/`uname -r`/extra/smi2021.ko```
+### Out of tree
 
-#### Install firmware
+The in-tree kbuild `Makefile` doubles as an external module Makefile; the
+only thing it needs is the config symbol on the command line:
 
-After installing the module, you will have to copy `firmware/smi2021_3c.bin` (md5sum: `90f78491e831e8db44cfdd6204a2b602`) as `/usr/lib/firmware/smi2021_3c.bin`. If you Google the hash, you'll find guides that explain how to extract it.
+```bash
+make -C /lib/modules/$(uname -r)/build M=$PWD CONFIG_VIDEO_SMI2021=m modules
+```
 
-## Module parameters
+Dependencies that must be enabled in the target kernel: `VIDEO_DEV`, `I2C`,
+`USB`, `SND`, `SND_PCM`, `VIDEOBUF2_VMALLOC` and `VIDEO_SAA711X`.
 
-- forceasgm - default 0. If set to 1 chipset version be set as gm7113C - supported now version in saa7115 modules.
-In kernel command line it look like smi2021.forceasgm=1. In build as internal module we can set VIDEO\_SMI2021\_INIT\_AS\_GM7113C, but that not recommended, as module parameter present.
-- monochrome - default 0. If set to 1 on init output be in monochrome mode only.
-- chiptype - default 0. You can skip autodetection and set chip version directly: 1 = gm7113C, 2 = saa7113.
-    - NOTICE: if you set 1 (gm7113C) - saa7115 module can incorrectly detect you chip, because now present some change in registry out and that part in under development. For module work as before - **NEED** use `forceasgm=1`
-    - NOTICE: chiptype **NOT** override version for other kernel module. For module work as before - **NEED** use `forceasgm=1`
+## Firmware
 
-## Troubleshooting
+These devices have no on-board flash. They enumerate as `1c88:0007` and need
+a firmware upload before the capture device appears. Install the blob that
+matches your device as `/lib/firmware/smi2021_3c.bin`, `smi2021_3e.bin` or
+`smi2021_3f.bin`.
 
-- monochrome output or no output - you need check, what `saa7115` module proper init you device (need once on first install, or new linux distrib, or with new smi2021 device(for proper check what they detected correct)).
-For that check, you need
-    1. load saa7115 modules with debug: ```modprobe -r saa7115; modprobe saa7115 debug=1```
-    2. load smi2021 and check dmesg: must be string like: ```saa7115 8-004a: gm7113c found @ 0x94 (smi2021)```
-If detection not work, or work notproper - try use `forceasgm=1` module option. For build as part of kernel and use override - be added additional options in Kconfig.
+All variants report the same USB ID while in bootloader mode, so the driver
+simply uploads the first firmware it finds. If more than one is installed,
+pick one explicitly:
 
+```bash
+modprobe smi2021 firmware_version=0x3f
+```
+
+## Upstream submission
+
+Because the driver is not in mainline yet, the upstream posting is a single
+"add new driver" patch, as was requested during the
+[2013 review](https://lkml.iu.edu/hypermail/linux/kernel/1303.1/03761.html)
+of the original submission. In addition to the files here it needs the two
+hunks shown under "In a kernel tree" above, and a `MAINTAINERS` entry:
+
+```
+SOMAGIC SMI2021 VIDEO CAPTURE DRIVER
+M:	Martin Blumenstingl <martin.blumenstingl@googlemail.com>
+L:	linux-media@vger.kernel.org
+S:	Maintained
+T:	git git://linuxtv.org/media.git
+F:	drivers/media/usb/smi2021/
+```
+
+The commits here carry no `Signed-off-by:`; add yours with
+`git commit --amend -s` before posting.
+
+Still to do before posting:
+
+- Test on real hardware and attach `v4l2-compliance` output, which reviewers
+  asked for in 2013.
+- Get the firmware blobs into `linux-firmware`. Their redistribution licence
+  is not clearly established, which is the main open blocker.
+
+## Testing without hardware
+
+`tools/parser-test/` builds a userspace harness that feeds synthetic
+ITU-R BT.656 streams through the driver's frame parser, extracted verbatim
+from `smi2021_main.c`, and checks the resulting frame byte for byte:
+
+```bash
+make -C tools/parser-test check
+```
 
 ## Credits
 
-David Manouchehri
-
-Jon Arne Jørgensen - jonjon.arnearne@gmail.com
-
-mastervolkov - mastervolkov@gmail.com
-
-https://github.com/Manouchehri/smi2021
-
-https://github.com/jonjonarnearne/smi2021
+Jon Arne Jørgensen, Tony Brown, Michal Demin, Jeffry Johnston, David
+Manouchehri, mastervolkov, and the stk1160 driver by Ezequiel Garcia.
