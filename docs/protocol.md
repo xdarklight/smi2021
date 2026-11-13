@@ -15,7 +15,9 @@ behaviour only; it contains no code from the firmware.
 
 Statements are marked by how they were established:
 
-- **Observed**: read directly from what the firmware does.
+- **Observed**: read directly from what the firmware does, or, where the
+  statement names a device, seen on that device, an EasyCAP 002 for the
+  experiments of this project.
 - **Inferred**: the most plausible interpretation of observed behaviour,
   not confirmed on hardware.
 - **Reported**: found by others on real hardware, or in captures of the
@@ -345,7 +347,17 @@ the observations below rather than from the firmware.
 
 Bit 5 selects a read, which is the only bit whose meaning is certain. The
 firmware's checks above suggest that bit 7 starts a transfer and that bit 6
-adds the subaddress byte.
+adds the subaddress byte. Experiments on an EasyCAP 002 with
+`smi2021_3c.bin` agree (observed):
+
+- With bit 6, a read starts at the subaddress; without it, it starts where
+  an earlier transfer left the decoder's subaddress.
+- Bits 2 and 4 make no difference to reads: 0xe0, 0xe4, 0xf0 and 0xf4 return
+  the same data with the same rate of failures, over 50 reads each, and so
+  do 0xa0, 0xa4, 0xb0 and 0xb4.
+- A command with bit 7 clear, 0x20 or 0x60, froze the engine until the
+  device lost power, see [I2C engines](hardware.md#i2c-engines). Such
+  commands must not be sent.
 
 The Windows driver reads a register of the decoder by writing the register
 number with 0x84, then reading one byte with 0xa0, with 0x00 instead of the
@@ -363,8 +375,11 @@ subaddress as its address byte, followed by the data. About one in five of
 these reads fails despite the firmware's retries, independently of the
 ones before and regardless of pauses between the requests, and is reported
 in bit 0 of the command in the reply. A read that does not report a
-failure has always returned the right value. Writes with 0xc0 have not
-been seen to fail (observed). The driver reads with 0xe0 and tries again
+failure has always returned the right value, for reads of one byte. In
+reads of two bytes, the second one is 0xff, without a failure, in about one
+in five (observed): a host that reads more than one byte can't trust the
+bytes after the first. Writes with 0xc0 have not been seen to fail
+(observed). The driver reads with 0xe0 and tries again
 when a read fails.
 
 The firmware completes a transfer, including its retries, before it
@@ -476,8 +491,14 @@ practice bits 7–6 of 0x31a5 pick the first board, and `PC2`, read as an
 input, the other two. So `PC2` is presumably a strap, and 0x31a5 holds an
 identification that the hardware provides, as no firmware writes it
 (inferred). 0x31a5 is the byte after the 32 that the data buffer of the
-second i2c engine presumably holds. The drivers for `smi2021_3c.bin` don't
-read it.
+second i2c engine holds, see [I2C engines](hardware.md#i2c-engines);
+bits 5–0 keep a written value, bits 7–6 don't, and the first engine has a
+register like it at 0x17a5 (observed). The drivers for `smi2021_3c.bin`
+don't read it.
+
+On an EasyCAP 002, 0x31a5 reads 0xc8 after power-up, bits 7–6 `11`, and
+`PC2`, which `smi2021_3c.bin` leaves an input, reads high (observed). That
+makes it the second board, which matches its decoder and inputs.
 
 The boards differ in the video decoder (Windows driver):
 
@@ -557,7 +578,8 @@ hardware for these and for the questions about the inside of the bridge.
   blocks, beyond the values listed here, and bit 6 of 0x1740.
 - What sets bit 7 of 0x3080, and why the host would clear it.
 - What mode 4 streams, and the bits of 0x1580 other than 7.
-- The individual bits of the i2c engine commands, beyond bit 5.
+- The individual bits of the i2c engine commands, beyond bits 5, 6 and 7;
+  bits 2 and 4 make no difference to reads.
 - Which chips the GPIO lines `PA7`, `PC0` and `PC4` are connected to.
 - The bootloader's behaviour beyond the requests listed above.
 

@@ -19,10 +19,11 @@ descriptions of its other chips, and with the vendor's Windows drivers, see
 [Sources](#sources). It contains no
 code from the firmware. Statements use the same markers as
 [`protocol.md`](protocol.md#about-this-document): unmarked statements are
-**observed** in the firmware, **inferred** ones are interpretations that
-have not been checked on hardware, and **reported** ones come from others'
-experiments. Where a statement needs a test on hardware, the test is listed
-in [Experiments](#experiments).
+**observed** in the firmware, or on hardware where they name the device,
+**inferred** ones are interpretations that have not been checked on
+hardware, and **reported** ones come from others' experiments. Where a
+statement needs a test on hardware, the test is listed in
+[Experiments](#experiments).
 
 Addresses are data space addresses unless noted otherwise. Program memory
 addresses are byte addresses, as in `avr-objdump` output.
@@ -34,22 +35,24 @@ addresses are byte addresses, as in `avr-objdump` output.
 | CPU core | | AVR instruction set; see [CPU core](#cpu-core) |
 | General purpose registers, `SREG`, stack pointer | 0x0000–0x001f, 0x005d–0x005f | standard AVR |
 | Port A, port C | 0x0033–0x0035, 0x003a–0x003b | ATmega103 layout, but port C can also be an input |
-| Timer/Counter0 | 0x0052–0x0053 | ATmega103 |
-| UART | 0x0029–0x002c | ATmega103, only in unused code |
-| SPI | 0x002d–0x002f (inferred) | presumably ATmega103, unused, see [SPI](#spi) |
+| Timer/Counter0 | 0x0052–0x0053 | ATmega103, prescaler measured |
+| Timer/Counter2 | 0x0043–0x0045 | ATmega103 registers present, unused |
+| UART | 0x0029–0x002c | ATmega103, registers present, only in unused code |
+| SPI | | not at the ATmega103 addresses, see [SPI](#spi) |
+| `RAMPZ` | 0x005b | ATmega103 register present, unused |
 | SRAM | 0x0060–0x0fff | ATmega103 |
 | USB 2.0 device controller | 0x1500–0x157f | Somagic's own |
 | Transport stream input with PID filters, mode 3 (inferred) | 0x1580–0x15a1 | Somagic's own |
 | Stream and IR control | 0x1600 | Somagic's own |
 | Audio engine | 0x1740 | Somagic's own |
-| First i2c engine | 0x1780–0x17a4 (inferred extent) | Somagic's own, **not** Atmel's TWI |
+| First i2c engine | 0x1780–0x17a9, repeated every 0x40 | Somagic's own, **not** Atmel's TWI |
 | Video engine | 0x1800 | Somagic's own |
 | Stream source | 0x1880 | Somagic's own |
 | USB buffer memory | 0x2000– | Somagic's own |
 | System control | 0x3080 | Somagic's own |
 | Engine of mode 4 | 0x3100 | Somagic's own |
-| Second i2c engine | 0x3180–0x31a4 (inferred extent) | same as the first one |
-| Board identification (inferred) | 0x31a5 | Somagic's own, see [Board identification](protocol.md#board-identification) |
+| Second i2c engine | 0x3180–0x31a9 | same as the first one |
+| Board identification | 0x31a5, and 0x17a5 likewise | Somagic's own, see [Board identification](protocol.md#board-identification) |
 
 The processor and its peripherals are those of an Atmel ATmega103. None
 of the hardware specific to the device could be matched to a controller
@@ -59,8 +62,13 @@ controllers](#comparison-with-known-controllers).
 The firmware uses none of the other ATmega103 peripherals: SPI, ADC,
 analog comparator, EEPROM, watchdog, Timer/Counter1 and 2, external
 interrupts and the external memory interface. `SLEEP` and `SPM` never
-appear either. Whether the chip has them is unknown, except that Somagic
-lists an SPI controller for its sibling chip.
+appear either. Writing their registers from the host shows which of them
+exist (observed, on an EasyCAP 002): `OCR0`, `OCR2`, `TCNT2`, `UBRR` and
+`RAMPZ` keep a written value; `OCR1AL`, `OCR1BL`, `TCNT1L`, `ADMUX`,
+`SPCR`, `EEARL` and `EEDR` read back 0. So Timer/Counter2 and the UART are
+there, and `RAMPZ` makes `ELPM` likely, while Timer/Counter1, the ADC, the
+EEPROM interface and an SPI at the ATmega103's addresses are presumably
+absent.
 
 ## CPU core
 
@@ -139,6 +147,15 @@ its external memory. The firmware sets its
 stack pointer to 0x0fff, so SRAM reaches at least there. Which parts of
 0x1000–0xffff not listed in this document contain anything is unknown.
 
+A read of an address that nothing answers stops the firmware until the
+device loses power: from then on, it answers no control request (observed,
+on an EasyCAP 002). The first read at 0x1000 did so, and so did a read of 30
+bytes from 0x1600, while 0x1600 and 0x1605 on their own read fine, so not
+even the blocks of known registers are decoded throughout; 0x1580–0x15bf
+reads fine. A firmware, or a host, must only read addresses known to
+exist. This rules out searching the data space for program memory or the
+bootloader from the host.
+
 The host can read and write the whole data space with
 [register access requests](protocol.md#bridge-registers), which makes it
 possible to examine most of the hardware with the original firmware.
@@ -153,8 +170,18 @@ Somagic specifies its sibling chip, the SMI-2020CBE, with "30 MHz for
 MCU Core" (reported, see [Related chips](#related-chips)). The timing of
 the infrared decoder agrees: with the prescaler of the ATmega103's Timer0,
 it fits the NEC remote protocol for CPU clocks between about 24 and 37 MHz
-(inferred, see [Timer/Counter0](#timercounter0)). This document assumes
-30 MHz where it converts cycles to time.
+(inferred, see [Timer/Counter0](#timercounter0)). Timer0, sampled from the
+host, counts at 29.3 kHz with clock select 7 and 117 kHz with clock select
+6, and, with the aliasing of a counter that wraps between samples
+accounted for, at 232, 467 and 939 kHz with clock selects 5, 4 and 3: the
+ATmega103's prescaler at a CPU clock of 30.0 MHz (observed, on an EasyCAP
+002). This document uses 30 MHz where it converts cycles to time.
+
+The EasyCAP 002 has two crystals, one marked 24.576 and one without a
+marking; how they are connected was not traced (reported). 24.576 MHz is
+the crystal frequency of the SAA7113H. 30 MHz is a sixteenth of the 480 MHz
+of a high speed USB PHY, the usual clock of its 16 bit UTMI interface,
+which would make the PHY the source of the CPU clock (inferred).
 
 ## Standard AVR peripherals
 
@@ -177,8 +204,10 @@ The firmware uses `SBI`, `CBI`, `SBIS` and `SBIC` on ports A and C, at the
 addresses of an ATmega103. Unlike on an ATmega103, port C has a direction
 register `DDRC` and an input register `PINC`, like port A, and the firmware
 uses both. Ports B, D, E and F of the ATmega103 are never touched; whether
-they exist is unknown. What the
-pins are connected to is in [GPIO and board
+they exist is unknown, and their input registers read 0. On an EasyCAP 002
+running `smi2021_3c.bin`, after the driver's initialization, `DDRC` is
+0x11, `PORTC` 0x11 and `PINC` 0x15: `PC2`, an input, reads high
+(observed). What the pins are connected to is in [GPIO and board
 signals](protocol.md#gpio-and-board-signals).
 
 ### Timer/Counter0
@@ -200,22 +229,26 @@ never touches `ASSR`, so the timer runs from the CPU clock. Then a sampling
 period of 11 counts is about 47 µs at 30 MHz, and the timing above holds
 for CPU clocks between about 24 and 37 MHz (inferred). On an ATmega16,
 whose Timer0 divides by 1024 for clock select 5 and counts edges on a pin
-for 7, the timing would need a CPU clock of over 180 MHz.
+for 7, the timing would need a CPU clock of over 180 MHz. The measured
+rates, see [Clock](#clock), fit the ATmega103's prescaler for all seven
+clock select values, and not the ATmega16's (observed).
 
 ### UART
 
 Both images contain functions that set `UBRR`, enable the receiver and
 transmitter in `UCR`, and send or receive a byte by polling `UDRE` and
 `RXC` in `USR`, all at the ATmega103 addresses and bit positions. Nothing
-calls them, so they are no evidence that the chip has a UART.
+calls them, so they are no evidence that the chip has a UART. The registers
+are there, though: `UBRR` keeps a written value, and `USR` reads 0x20,
+`UDRE`, the transmit buffer empty, as on an ATmega103 at reset (observed).
+Whether its pins come out of the chip is unknown.
 
 ### SPI
 
 Somagic specifies an "SPI-compatible controller, running at 1 MHz" for the
-SMI-2020CBE (reported). The firmware has no code for it. If it is the
-ATmega103's SPI, its registers `SPCR`, `SPSR` and `SPDR` are at I/O
-addresses 0x0d to 0x0f, data space 0x2d to 0x2f (inferred); see
-[Experiments](#experiments).
+SMI-2020CBE (reported). The firmware has no code for it. It is not the
+ATmega103's SPI, or not at its addresses: `SPCR`, data space 0x2d, reads
+back 0 after a write of 0x03 (observed).
 
 ## Startup
 
@@ -411,8 +444,25 @@ the most consistent reading is (inferred):
   out of the way as a disabled endpoint `0x81`.
 
 With 01 as the enabled state instead, the endpoint in use in modes 3 and 5
-would be block A, at endpoint `0x81`, which the host never reads. The
-experiment in [Experiments](#experiments) settles it.
+would be block A, at endpoint `0x81`, which the host never reads.
+
+The experiment settles it in favour of the first reading (observed, twice,
+on an EasyCAP 002 with `smi2021_3c.bin`). Changing the blocks after the
+mode request of mode 5:
+
+| A: +1, state | B: +1, state | Endpoint `0x82` |
+|--------------|--------------|-----------------|
+| 0x15, 01 (as set) | 0x25, 00 (as set) | the stream of mode 5 |
+| 0x15, 00 | 0x25, 00 | the stream of mode 5 |
+| 0x15, 00 | 0x25, 01 | nothing |
+| 0x25, 01 | 0x15, 00 | nothing |
+| 0x25, 00 | 0x15, 01 | nothing |
+
+So state 00 enables, 01 disables, bits 7–4 of +1 are the endpoint number,
+and the stream of mode 5 comes from block B: made endpoint `0x82` and
+enabled, block A doesn't send it. "Nothing" means that the host saw no
+response at all to its isochronous tokens, as opposed to packets without
+data.
 
 Other accesses:
 
@@ -442,7 +492,15 @@ The two engines are at 0x1780 and 0x3180 and are identical:
 | +2 | status: bit 4 busy, bit 6 or 7 set when the transfer has ended, bit 5 set if it failed |
 | +3 | subaddress |
 | +4 | slave address, 8 bit |
-| +5… | data buffer |
+| +5–+0x24 | data buffer, 32 bytes |
+| +0x25 | bits 7–6 fixed, presumably straps, 11 on an EasyCAP 002; bits 5–0 keep a written value; see [Board identification](protocol.md#board-identification) |
+| +0x26–+0x29 | registers of unknown use; +0x26 and +0x28 keep a written value |
+
+The block repeats every 0x40 bytes: 0x17c0 reads as 0x1780 (observed).
+Each engine has its own +0x25 to +0x29: a write at 0x17a6 doesn't show at
+0x31a6, though both read the same, c8 32 d0 dd 06, after power-up
+(observed). +0x27 and +0x29 came back swapped in a read that started at
++0x23, but not when read on their own or from +0x25; why is unknown.
 
 To run a transfer, the firmware
 
@@ -459,13 +517,22 @@ It retries a failed transfer up to 16 times by repeating steps 1 and 3 to
 5, without writing the buffer again. So the buffer is memory that keeps
 its contents, not a FIFO (inferred). Step 4 stops right away unless bit 4
 is set, so the engine must show bit 4 as soon as the command is written
-(inferred). How large the buffer is, is unknown; the host can ask for
-transfers of up to 255 bytes, and replies hold up to 32 bytes of data.
+(inferred). The buffer holds 32 bytes: the next byte is the register at
++0x25 (observed). The host can ask for transfers of up to 255 bytes, and
+replies hold up to 32 bytes of data.
+
+A command with bit 7 clear, 0x20 or 0x60 with a subaddress, froze the
+first engine until the device lost power (observed): none of its
+registers took a write any more, the command register kept 0x60, the
+status read 0, and so every transfer the firmware ran on it ended at once,
+without a failure, leaving the buffer as it was. A scan of the bus then
+found a device at every address.
 
 The meaning of the command bits, as far as it is known, is in [I2C
 engines](protocol.md#i2c-engines). The bus clock is never configured. The
-firmware only uses the engines on the host's request; which devices are on
-the second bus is unknown.
+firmware only uses the engines on the host's request. On an EasyCAP 002,
+the first bus has only the decoder at 0x25 (7 bit), and nothing answers on
+the second one (observed).
 
 ## Streaming engines
 
@@ -489,6 +556,11 @@ see [Transport stream input](protocol.md#transport-stream-input). What the
 engine of mode 4 serves is unknown; Somagic's SMI-2020CBE also has a 1-bit
 stream input for a GPS receiver (see [Related chips](#related-chips)),
 which would be a candidate (inferred). The image of 2013 drops mode 4.
+
+On an EasyCAP 002 with `smi2021_3c.bin`, endpoint `0x82` sends nothing in
+modes 3 and 4, at either alternate setting: the host sees no response to
+its tokens, apart from a single packet of 1023 bytes in mode 4 (observed).
+The descriptors only have `0x82`, so there is nowhere else to look.
 
 ### System control register 0x3080
 
@@ -613,34 +685,47 @@ can have side effects, for instance 0x1503 presumably acknowledges an
 event, so the registers of the USB controller should be left out of blind
 surveys.
 
+Experiments 1 to 6 ran on an EasyCAP 002 with `smi2021_3c.bin` in November
+2026; the results are in the sections named after each item.
+
 With the original firmware:
 
 1. **CPU clock and Timer0 prescaler**: write each clock select value to
    `TCCR0` and sample `TCNT0` repeatedly, timing the samples on the host.
    The rate for each value gives the prescaler table and the CPU clock,
-   expected to be those of an ATmega103 and 30 MHz.
+   expected to be those of an ATmega103 and 30 MHz. **Done**: the
+   ATmega103's, at 30.0 MHz, see [Clock](#clock).
 2. **Data space survey**: read 0x1000–0xffff in blocks and note what reads
    back as something other than a constant, what keeps a written value,
    and what mirrors other addresses. Look for a copy of the firmware image,
    which would show that program memory is visible in data space, and for
-   the bootloader.
+   the bootloader. **Stopped**: a read of an address that nothing answers
+   stops the firmware, see [Data space](#data-space), so a blind survey
+   costs a power cycle per gap. Experiment 9 covers program memory instead.
 3. **Other AVR peripherals**: write and read back I/O registers of the
    ATmega103 that the firmware doesn't use, for example `OCR0`, `OCR2`,
    `UBRR`, `SPCR`, `ADMUX` and `RAMPZ`, to find which exist; for ports B,
    D, E and F, only read the input registers and leave the direction
    registers alone. `MCUCR` (external memory and sleep), `MCUSR`,
-   `WDTCR` and `XDIV` (clock divider) should not be written.
+   `WDTCR` and `XDIV` (clock divider) should not be written. **Done**, see
+   [Standard AVR peripherals](#standard-avr-peripherals).
 4. **I2C buffer**: write a pattern to 0x1785 and up and read it back to
-   find the size of the buffer; scan the second bus for devices.
+   find the size of the buffer; scan the second bus for devices. **Done**:
+   32 bytes, and no device on the second bus, see [I2C
+   engines](#i2c-engines); the command bits are in [I2C
+   engines](protocol.md#i2c-engines).
 5. **Endpoint blocks**: in mode 5, swap the values of +1 or the states of
    blocks A and B, and see which block's data arrives at endpoint `0x82`.
+   **Done**, see [Endpoint register blocks](#endpoint-register-blocks).
 6. **Modes 3 and 4**: stream in each mode and look at what arrives. Mode 3
    should be a transport stream input, which an EasyCAP doesn't feed, so
    empty packets are likely; programming a PID filter and seeing whether
    0x1580 and the filters read back as written would confirm the
-   registers.
+   registers. **Done** as far as streaming goes: nothing arrives, see
+   [Streaming engines](#streaming-engines); the PID filters were not
+   programmed.
 7. **GPIO**: find what `PA7`, `PC0`, `PC1`, `PC2` and `PC4` are connected
-   to.
+   to. Needs someone at the board with a multimeter; not done yet.
 
 With a test firmware:
 
