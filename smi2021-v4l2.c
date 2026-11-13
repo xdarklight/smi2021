@@ -242,12 +242,35 @@ static int smi2021_g_std(struct file *file, void *priv, v4l2_std_id *norm)
 	return 0;
 }
 
+/*
+ * The decoder decodes one colour system at a time, while S_STD may ask for
+ * standards of several, for example what QUERYSTD returned: the saa7113 only
+ * tells the line count, so that is all the standards with it. The saa7115
+ * driver then picks SECAM over PAL, which leaves a PAL signal without colour.
+ * Pick the most common system of the set instead, of the line count that the
+ * saa7115 driver would go for.
+ */
+static v4l2_std_id smi2021_pick_std(v4l2_std_id norm)
+{
+	if (norm & V4L2_STD_525_60) {
+		norm &= V4L2_STD_525_60;
+		if (norm & V4L2_STD_NTSC)
+			norm &= V4L2_STD_NTSC;
+	} else if (norm & V4L2_STD_PAL) {
+		norm &= V4L2_STD_PAL;
+	}
+
+	return norm;
+}
+
 static int smi2021_s_std(struct file *file, void *priv, v4l2_std_id norm)
 {
 	struct smi2021 *smi2021 = video_drvdata(file);
 
 	if (!(norm & V4L2_STD_ALL))
 		return -EINVAL;
+
+	norm = smi2021_pick_std(norm);
 
 	if (norm == smi2021->cur_norm)
 		return 0;
