@@ -12,13 +12,19 @@
 
 #include <linux/bits.h>
 #include <linux/cleanup.h>
+#include <linux/device.h>
 #include <linux/ktime.h>
 
+#include <media/i2c/saa7115.h>
+#include <media/v4l2-common.h>
 #include <media/v4l2-event.h>
 #include <media/v4l2-ioctl.h>
 #include <media/videobuf2-vmalloc.h>
 
 #include "smi2021.h"
+
+/* 7 bit I2C address of the saa7113 compatible decoder, 4AH in its datasheet */
+#define SMI2021_DECODER_I2C_ADDR	0x25
 
 /*
  * Bits of the fourth word of a timing reference code, see Table 2 of ITU-R
@@ -442,7 +448,7 @@ void smi2021_clear_queue(struct smi2021 *smi2021, enum vb2_buffer_state state)
 	}
 }
 
-int smi2021_vb2_setup(struct smi2021 *smi2021)
+static int smi2021_vb2_setup(struct smi2021 *smi2021)
 {
 	struct vb2_queue *q = &smi2021->vb_vidq;
 
@@ -458,7 +464,7 @@ int smi2021_vb2_setup(struct smi2021 *smi2021)
 	return vb2_queue_init(q);
 }
 
-int smi2021_video_register(struct smi2021 *smi2021)
+static int smi2021_video_register(struct smi2021 *smi2021)
 {
 	struct video_device *vdev = &smi2021->vdev;
 	int rc;
@@ -483,4 +489,99 @@ int smi2021_video_register(struct smi2021 *smi2021)
 		  video_device_node_name(vdev));
 
 	return 0;
+}
+
+/*
+ * The driver tells active video from blanking by the V flag of the timing
+ * reference codes. Have the decoder generate it from VREF with the long VREF
+ * range: according to Tables 6 and 7 of the SAA7113H datasheet this flags 288
+ * lines per field as active for 625 line standards and 242 lines for 525 line
+ * ones, of which the driver captures the first 240.
+ */
+static enum saa7113_r10_ofts smi2021_decoder_ofts = SAA7113_OFTS_VFLAG_BY_VREF;
+static bool smi2021_decoder_vrln = true;
+
+static struct saa7115_platform_data smi2021_decoder_pdata = {
+	.saa7113_r10_ofts = &smi2021_decoder_ofts,
+	.saa7113_r10_vrln = &smi2021_decoder_vrln,
+};
+
+/*
+ * Create the V4L2 device. Once this succeeds smi2021_release() owns the
+ * teardown of the driver state, so the caller gives up its reference with
+ * v4l2_device_put() rather than unwinding by hand.
+ */
+int smi2021_v4l2_init(struct smi2021 *smi2021)
+{
+	int rc;
+
+	smi2021->cur_norm = V4L2_STD_NTSC;
+	smi2021->cur_height = SMI2021_NTSC_LINES;
+
+	rc = smi2021_vb2_setup(smi2021);
+	if (rc)
+		return rc;
+
+	rc = v4l2_ctrl_handler_init(&smi2021->ctrl_handler, 0);
+	if (rc)
+		goto err_vb2;
+
+	smi2021->v4l2_dev.release = smi2021_release;
+	smi2021->v4l2_dev.ctrl_handler = &smi2021->ctrl_handler;
+	rc = v4l2_device_register(smi2021->dev, &smi2021->v4l2_dev);
+	if (rc)
+		goto err_ctrl;
+
+	return 0;
+
+err_ctrl:
+	v4l2_ctrl_handler_free(&smi2021->ctrl_handler);
+err_vb2:
+	vb2_queue_release(&smi2021->vb_vidq);
+
+	return rc;
+}
+
+/* Tear down what smi2021_v4l2_init() set up */
+void smi2021_v4l2_cleanup(struct smi2021 *smi2021)
+{
+	vb2_queue_release(&smi2021->vb_vidq);
+	v4l2_device_unregister(&smi2021->v4l2_dev);
+	v4l2_ctrl_handler_free(&smi2021->ctrl_handler);
+}
+
+/* Attach the decoder and offer the video device to userspace */
+int smi2021_v4l2_register(struct smi2021 *smi2021)
+{
+	struct i2c_board_info decoder_info = {
+		I2C_BOARD_INFO("saa7115_auto", SMI2021_DECODER_I2C_ADDR),
+		.platform_data = &smi2021_decoder_pdata,
+	};
+	int rc;
+
+	/* The saa7115 driver tells a saa7113 from its gm7113c clone itself */
+	smi2021->decoder = v4l2_i2c_new_subdev_board(&smi2021->v4l2_dev,
+						     &smi2021->i2c_adap,
+						     &decoder_info, NULL);
+	if (!smi2021->decoder)
+		return dev_err_probe(smi2021->dev, -ENODEV,
+				     "failed to register the video decoder\n");
+
+	v4l2_subdev_call(smi2021->decoder, video, s_std, smi2021->cur_norm);
+	v4l2_subdev_call(smi2021->decoder, video, s_routing,
+			 smi2021->board->inputs[smi2021->cur_input].type, 0, 0);
+
+	rc = smi2021_video_register(smi2021);
+	if (rc)
+		return dev_err_probe(smi2021->dev, rc,
+				     "failed to register video device\n");
+
+	return 0;
+}
+
+/* Stop offering the video device, the hardware behind it is gone */
+void smi2021_v4l2_unregister(struct smi2021 *smi2021)
+{
+	video_unregister_device(&smi2021->vdev);
+	v4l2_device_disconnect(&smi2021->v4l2_dev);
 }

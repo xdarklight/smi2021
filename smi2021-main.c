@@ -20,7 +20,6 @@
 #include <linux/unaligned.h>
 
 #include <media/i2c/saa7115.h>
-#include <media/v4l2-common.h>
 
 #include "smi2021.h"
 
@@ -89,9 +88,6 @@
  */
 #define SMI2021_REG_VIDEO_CTRL		0x1800
 #define SMI2021_REG_VIDEO_CTRL_OFF	0x00
-
-/* 7 bit I2C address of the saa7113 compatible decoder, 4AH in its datasheet */
-#define SMI2021_DECODER_I2C_ADDR	0x25
 
 /* Magic words that identify the payload of an isochronous chunk */
 #define SMI2021_CHUNK_MAGIC_VIDEO	0xaaaa0000
@@ -621,17 +617,14 @@ void smi2021_stop_streaming(struct vb2_queue *vq)
 /* Allocates the device numbers */
 static DEFINE_IDA(smi2021_ida);
 
-static void smi2021_release(struct v4l2_device *v4l2_dev)
+void smi2021_release(struct v4l2_device *v4l2_dev)
 {
 	struct smi2021 *smi2021 = container_of(v4l2_dev, struct smi2021,
 					       v4l2_dev);
 
-	vb2_queue_release(&smi2021->vb_vidq);
-
 	/* Unregister the decoder before the i2c adapter it lives on */
-	v4l2_device_unregister(&smi2021->v4l2_dev);
+	smi2021_v4l2_cleanup(smi2021);
 	i2c_del_adapter(&smi2021->i2c_adap);
-	v4l2_ctrl_handler_free(&smi2021->ctrl_handler);
 
 	mutex_destroy(&smi2021->reg_lock);
 	mutex_destroy(&smi2021->v4l2_lock);
@@ -641,21 +634,6 @@ static void smi2021_release(struct v4l2_device *v4l2_dev)
 	ida_free(&smi2021_ida, smi2021->nr);
 	kfree(smi2021);
 }
-
-/*
- * The driver tells active video from blanking by the V flag of the timing
- * reference codes. Have the decoder generate it from VREF with the long VREF
- * range: according to Tables 6 and 7 of the SAA7113H datasheet this flags 288
- * lines per field as active for 625 line standards and 242 lines for 525 line
- * ones, of which the driver captures the first 240.
- */
-static enum saa7113_r10_ofts smi2021_decoder_ofts = SAA7113_OFTS_VFLAG_BY_VREF;
-static bool smi2021_decoder_vrln = true;
-
-static struct saa7115_platform_data smi2021_decoder_pdata = {
-	.saa7113_r10_ofts = &smi2021_decoder_ofts,
-	.saa7113_r10_vrln = &smi2021_decoder_vrln,
-};
 
 /*
  * All inputs of the decoder that a board may have connected. The USB product
@@ -744,10 +722,6 @@ static int smi2021_usb_probe(struct usb_interface *intf,
 			     const struct usb_device_id *devid)
 {
 	struct usb_device *udev = interface_to_usbdev(intf);
-	struct i2c_board_info decoder_info = {
-		I2C_BOARD_INFO("saa7115_auto", SMI2021_DECODER_I2C_ADDR),
-		.platform_data = &smi2021_decoder_pdata,
-	};
 	const struct usb_host_endpoint *ep;
 	struct usb_host_interface *alt;
 	struct smi2021 *smi2021;
@@ -792,22 +766,9 @@ static int smi2021_usb_probe(struct usb_interface *intf,
 	spin_lock_init(&smi2021->buf_lock);
 	INIT_LIST_HEAD(&smi2021->avail_bufs);
 
-	smi2021->cur_norm = V4L2_STD_NTSC;
-	smi2021->cur_height = SMI2021_NTSC_LINES;
-
-	rc = smi2021_vb2_setup(smi2021);
+	rc = smi2021_v4l2_init(smi2021);
 	if (rc)
 		goto err_free;
-
-	rc = v4l2_ctrl_handler_init(&smi2021->ctrl_handler, 0);
-	if (rc)
-		goto err_vb2;
-
-	smi2021->v4l2_dev.release = smi2021_release;
-	smi2021->v4l2_dev.ctrl_handler = &smi2021->ctrl_handler;
-	rc = v4l2_device_register(smi2021->dev, &smi2021->v4l2_dev);
-	if (rc)
-		goto err_ctrl;
 
 	/* From here on smi2021_release() tears everything down */
 
@@ -829,20 +790,6 @@ static int smi2021_usb_probe(struct usb_interface *intf,
 	if (rc)
 		goto err_put;
 
-	/* The saa7115 driver tells a saa7113 from its gm7113c clone itself */
-	smi2021->decoder = v4l2_i2c_new_subdev_board(&smi2021->v4l2_dev,
-						     &smi2021->i2c_adap,
-						     &decoder_info, NULL);
-	if (!smi2021->decoder) {
-		rc = dev_err_probe(smi2021->dev, -ENODEV,
-				   "failed to register the video decoder\n");
-		goto err_put;
-	}
-
-	v4l2_subdev_call(smi2021->decoder, video, s_std, smi2021->cur_norm);
-	v4l2_subdev_call(smi2021->decoder, video, s_routing,
-			 smi2021->board->inputs[smi2021->cur_input].type, 0, 0);
-
 	/*
 	 * Audio arrives in the same URBs as the video, so set up the audio
 	 * device before streaming can start.
@@ -852,12 +799,9 @@ static int smi2021_usb_probe(struct usb_interface *intf,
 		dev_warn(smi2021->dev, "failed to register audio device: %pe\n",
 			 ERR_PTR(rc));
 
-	rc = smi2021_video_register(smi2021);
-	if (rc) {
-		rc = dev_err_probe(smi2021->dev, rc,
-				   "failed to register video device\n");
+	rc = smi2021_v4l2_register(smi2021);
+	if (rc)
 		goto err_snd;
-	}
 
 	usb_set_intfdata(intf, smi2021);
 
@@ -873,10 +817,6 @@ err_put:
 
 	return rc;
 
-err_ctrl:
-	v4l2_ctrl_handler_free(&smi2021->ctrl_handler);
-err_vb2:
-	vb2_queue_release(&smi2021->vb_vidq);
 err_free:
 	mutex_destroy(&smi2021->reg_lock);
 	mutex_destroy(&smi2021->v4l2_lock);
@@ -908,8 +848,7 @@ static void smi2021_usb_disconnect(struct usb_interface *intf)
 		smi2021_clear_queue(smi2021, VB2_BUF_STATE_ERROR);
 	}
 
-	video_unregister_device(&smi2021->vdev);
-	v4l2_device_disconnect(&smi2021->v4l2_dev);
+	smi2021_v4l2_unregister(smi2021);
 
 	/*
 	 * This stops a stream that the pcm device started and makes sure that

@@ -166,10 +166,13 @@ int smi2021_ctrl_read(struct usb_device *udev, u16 value, void *data,
 int smi2021_request_audio(struct smi2021 *smi2021, bool enable);
 int smi2021_start_streaming(struct vb2_queue *vq, unsigned int count);
 void smi2021_stop_streaming(struct vb2_queue *vq);
+void smi2021_release(struct v4l2_device *v4l2_dev);
 
 /* Provided by smi2021-v4l2.c */
-int smi2021_vb2_setup(struct smi2021 *smi2021);
-int smi2021_video_register(struct smi2021 *smi2021);
+int smi2021_v4l2_init(struct smi2021 *smi2021);
+void smi2021_v4l2_cleanup(struct smi2021 *smi2021);
+int smi2021_v4l2_register(struct smi2021 *smi2021);
+void smi2021_v4l2_unregister(struct smi2021 *smi2021);
 void smi2021_clear_queue(struct smi2021 *smi2021, enum vb2_buffer_state state);
 void smi2021_parse_video(struct smi2021 *smi2021, const u8 *data,
 			 unsigned int len);
