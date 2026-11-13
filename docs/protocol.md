@@ -288,9 +288,12 @@ first data byte as subaddress, and the data bytes. The command byte is
 written to the engine unchanged, so its meaning is that of the engine; see
 [I2C engines](#i2c-engines).
 
-The firmware retries a failed transfer up to 16 times. If the last try
-fails too, it sets bit 0 of the command in the reply to a read. A failed
-write can't be detected by the host.
+The firmware retries a failed transfer up to 16 times, one try right after
+the other. If the last try fails too, it sets bit 0 of the command in the
+reply to a read. A failed write can't be detected by the host.
+
+The firmware starts no transfers of its own: every access to the decoder
+comes from a host request.
 
 With flag bit 4, the request doesn't access the i2c bus; the reply instead
 contains 16 bytes from SRAM 0x0060 to 0x006f. Their meaning is unknown;
@@ -309,14 +312,20 @@ The engines are at 0x1780 and 0x3180, with the same layout:
 | +4 | slave address, 8 bit |
 | +5… | data bytes |
 
-Commands seen in use:
+Commands in use:
 
-| Command | Transfer |
-|---------|----------|
-| 0x84 | write the data bytes |
-| 0xa0 | read the data bytes |
-| 0xc0 | write the subaddress, then the data bytes |
-| 0xe0 | write the subaddress, then read the data bytes |
+| Command | Transfer | Used by |
+|---------|----------|---------|
+| 0x84 | write the data bytes | the Windows driver, to set the subaddress for 0xa0 (reported) |
+| 0xa0 | read the data bytes | the Windows driver (reported) |
+| 0xc0 | write the subaddress, then the data bytes | this driver, for writes |
+| 0xe0 | write the subaddress, then read the data bytes | this driver, for reads; found by experiment |
+
+The firmware handles these alike apart from bit 5: it loads the subaddress
+register for every command, whether or not the command uses it, and for
+reads copies the data bytes into the reply. What bit 6 does, and so the
+transfers in this table, is therefore the engine's behaviour, inferred from
+the observations below rather than from the firmware.
 
 Bit 5 selects a read, which is the only bit whose meaning is certain. The
 firmware's checks above suggest that bit 7 starts a transfer and that bit 6
