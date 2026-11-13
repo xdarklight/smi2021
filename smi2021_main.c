@@ -706,6 +706,14 @@ static const struct smi2021_input smi2021_dc60_inputs[] = {
 	{ "S-Video", SAA7115_SVIDEO1 },
 };
 
+/* Named and ordered after the labels of the connectors */
+static const struct smi2021_input smi2021_easycap002_inputs[] = {
+	{ "Video 1", SAA7115_COMPOSITE2 },
+	{ "Video 2", SAA7115_COMPOSITE3 },
+	{ "Video 3", SAA7115_COMPOSITE0 },
+	{ "Video 4", SAA7115_COMPOSITE1 },
+};
+
 /* Values of the card module parameter */
 enum smi2021_board_type {
 	SMI2021_BOARD_ALL_INPUTS,
@@ -726,9 +734,8 @@ static const struct smi2021_board smi2021_boards[] = {
 	},
 	[SMI2021_BOARD_EASYCAP002] = {
 		.name = "EasyCAP 002",
-		/* The four composite inputs */
-		.inputs = smi2021_all_inputs,
-		.num_inputs = 4,
+		.inputs = smi2021_easycap002_inputs,
+		.num_inputs = ARRAY_SIZE(smi2021_easycap002_inputs),
 	},
 };
 

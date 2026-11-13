@@ -34,7 +34,7 @@ appear; the kernel log shows each device's number.
 |--------|------------------------------------------|
 | 0      | all inputs (default)                     |
 | 1      | EasyCAP DC60: composite and S-Video      |
-| 2      | EasyCAP 002: four composite inputs       |
+| 2      | EasyCAP 002: Video 1 to Video 4, as labelled |
 
 ```bash
 modprobe smi2021 card=2
