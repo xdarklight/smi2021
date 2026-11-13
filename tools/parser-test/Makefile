@@ -3,7 +3,7 @@
 # Userspace harness for the smi2021 frame parser. The parser is extracted
 # verbatim from the driver source so that the tested code is the shipped code.
 
-DRIVER_SRC := ../../smi2021_main.c
+DRIVER_SRC := ../../smi2021-main.c
 
 .PHONY: check clean
 check: test

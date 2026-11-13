@@ -3,7 +3,7 @@
  * Userspace test for the smi2021 frame parser.
  *
  * The code under test, from smi2021_get_buf() to smi2021_parse_video(), is
- * extracted verbatim from smi2021_main.c into parser_extract.h. This file
+ * extracted verbatim from smi2021-main.c into parser_extract.h. This file
  * provides the few kernel interfaces it uses, and synthetic ITU-R BT.656
  * streams to feed it.
  */

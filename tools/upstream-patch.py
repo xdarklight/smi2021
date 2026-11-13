@@ -21,8 +21,8 @@ import tempfile
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 DRIVER_DIR = 'drivers/media/usb/smi2021'
-DRIVER_FILES = ['Kconfig', 'Makefile', 'smi2021.h', 'smi2021_audio.c',
-                'smi2021_bootloader.c', 'smi2021_main.c', 'smi2021_v4l2.c']
+DRIVER_FILES = ['Kconfig', 'Makefile', 'smi2021.h', 'smi2021-audio.c',
+                'smi2021-bootloader.c', 'smi2021-main.c', 'smi2021-v4l2.c']
 
 KCONFIG_LINE = 'source "drivers/media/usb/smi2021/Kconfig"\n'
 MAKEFILE_LINE = 'obj-$(CONFIG_VIDEO_SMI2021) += smi2021/\n'

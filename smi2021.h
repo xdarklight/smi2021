@@ -132,10 +132,10 @@ struct smi2021 {
 	struct work_struct		pcm_trigger_work;
 };
 
-/* Provided by smi2021_bootloader.c */
+/* Provided by smi2021-bootloader.c */
 int smi2021_bootloader_probe(struct usb_interface *intf);
 
-/* Provided by smi2021_main.c */
+/* Provided by smi2021-main.c */
 int smi2021_ctrl_write(struct usb_device *udev, u16 value, const void *data,
 		       u16 size);
 int smi2021_ctrl_read(struct usb_device *udev, u16 value, void *data,
@@ -144,12 +144,12 @@ void smi2021_toggle_audio(struct smi2021 *smi2021, bool enable);
 int smi2021_start_streaming(struct vb2_queue *vq, unsigned int count);
 void smi2021_stop_streaming(struct vb2_queue *vq);
 
-/* Provided by smi2021_v4l2.c */
+/* Provided by smi2021-v4l2.c */
 int smi2021_vb2_setup(struct smi2021 *smi2021);
 int smi2021_video_register(struct smi2021 *smi2021);
 void smi2021_clear_queue(struct smi2021 *smi2021, enum vb2_buffer_state state);
 
-/* Provided by smi2021_audio.c */
+/* Provided by smi2021-audio.c */
 int smi2021_snd_register(struct smi2021 *smi2021);
 void smi2021_snd_unregister(struct smi2021 *smi2021);
 void smi2021_audio(struct smi2021 *smi2021, const u8 *data, unsigned int len);

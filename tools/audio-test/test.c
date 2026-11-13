@@ -3,7 +3,7 @@
  * Userspace test for the smi2021 audio ring buffer handling.
  *
  * smi2021_pcm_advance() and smi2021_audio_copy() are extracted verbatim from
- * smi2021_audio.c into audio_extract.h. This file provides the few kernel
+ * smi2021-audio.c into audio_extract.h. This file provides the few kernel
  * interfaces they use, and synthetic audio chunks to feed them.
  */
 #include <stdbool.h>

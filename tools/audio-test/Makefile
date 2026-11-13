@@ -4,7 +4,7 @@
 # test is extracted verbatim from the driver source, so that the tested code
 # is the shipped code.
 
-DRIVER_SRC := ../../smi2021_audio.c
+DRIVER_SRC := ../../smi2021-audio.c
 
 .PHONY: check clean
 check: test

@@ -137,7 +137,7 @@ do:
 
 `tools/parser-test/` builds a userspace harness that feeds synthetic
 ITU-R BT.656 streams through the driver's frame parser and buffer handling,
-extracted verbatim from `smi2021_main.c`, and checks the resulting frames
+extracted verbatim from `smi2021-main.c`, and checks the resulting frames
 byte for byte, including the 242 active lines per field that the decoder
 sends for NTSC:
 
@@ -146,7 +146,7 @@ make -C tools/parser-test check
 ```
 
 `tools/audio-test/` does the same for the audio ring buffer handling of
-`smi2021_audio.c`: a clean stream has to arrive byte for byte with periods
+`smi2021-audio.c`: a clean stream has to arrive byte for byte with periods
 counted exactly, data after lost bytes has to be sample aligned again, and
 random corruption must never write outside the buffer, for buffer sizes
 down to one frame:
