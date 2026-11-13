@@ -66,6 +66,11 @@ nothing on it.
 
     amixer -c 0 sset 'AIU ACODEC I2S Lane Select' 0
 
+These controls have been found back at their defaults during a session,
+for reasons not found; `alsactl store` keeps the working state for when
+the board's state gets restored, and a capture with only the hum at the
+frame rate is the sign to check them.
+
 ### Getting an oops back without a console
 
 With the serial console on a machine the test runner can not read,
@@ -83,15 +88,22 @@ the only witness, and `results/breadcrumb` names the step that caused it.
 
 ## Running
 
-Build the clip once per standard. It is played on a loop, so a minute is
-plenty:
+Build the clip once per standard. It is played on a loop, and is a whole
+number of counter cycles long, so the counter runs on across the loop. The
+loop still makes mpv skip or repeat a frame and leaves a short gap in the
+audio, so a capture that spans it fails; the clips are four minutes long to
+make that rare:
 
     ./make-pattern.sh --std ntsc
     ./make-pattern.sh --std pal
 
-Play it, in its own `tmux` window so it survives an SSH drop:
+Play it, in its own `tmux` window so it survives an SSH drop. The DRM mode
+follows the size of the clip, whatever mode the kernel command line set:
 
     ./play-signal.sh pattern-ntsc.mkv
+
+`run-tests.sh` takes the standard of the clip that is playing from
+`SMI2021_STD`, which defaults to `ntsc`.
 
 Then, in another window:
 

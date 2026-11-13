@@ -127,6 +127,14 @@ audio_device() {
 	return 1
 }
 
+# Frames in the given number of seconds, in the standard being tested
+frames() {
+	case $std in
+	ntsc)	echo $(($1 * 30000 / 1001)) ;;
+	*)	echo $(($1 * 25)) ;;
+	esac
+}
+
 input_count() {
 	v4l2-ctl -d "$1" --list-inputs | grep -c '^[[:space:]]*Input[[:space:]]*:'
 }
@@ -136,6 +144,8 @@ input_count() {
 # select an input before believing what it says about itself.
 input_status() {
 	v4l2-ctl -d "$1" --set-input="$2" >/dev/null 2>&1 || return 1
+	# The decoder needs a moment to lock onto the new input
+	sleep 1
 	v4l2-ctl -d "$1" --list-inputs | awk -v want="$2" '
 		/^[[:space:]]*Input[[:space:]]*:/ { index_seen = $NF }
 		/^[[:space:]]*Status[[:space:]]*:/ && index_seen == want {
@@ -176,7 +186,10 @@ run_step() {
 			CONFIG_VIDEO_SMI2021=m modules || fail 'build failed'
 		;;
 	load-unload)
-		say 'loading and unloading with no device bound'
+		say 'loading and unloading'
+		# Start from a clean slate if an earlier run left it loaded
+		! grep -q '^smi2021 ' /proc/modules || rmmod smi2021 ||
+			fail 'could not unload the module that was loaded'
 		modprobe saa7115 || fail 'saa7115 missing, CONFIG_VIDEO_SAA711X'
 		insmod "$module" "card=$card" || fail 'insmod failed'
 		rmmod smi2021 || fail 'rmmod failed'
@@ -201,8 +214,8 @@ run_step() {
 		;;
 	capture-video)
 		say 'video only'
-		frames=$((duration * 25))
-		capture_video video "$frames" && check --video "$results/video.uyvy"
+		capture_video video "$(frames "$duration")" &&
+			check --video "$results/video.uyvy"
 		;;
 	capture-audio)
 		say 'audio only, with the video engine stopped'
@@ -210,24 +223,38 @@ run_step() {
 		;;
 	capture-both)
 		say 'video and audio at the same time'
-		capture_audio both &
-		audio_pid=$!
-		capture_video both $((duration * 25))
-		wait "$audio_pid" || :
+		# Video first, so that the audio joins the running capture
+		# rather than making the driver restart the stream for it
+		capture_video both "$(frames $((duration + 2)))" &
+		video_pid=$!
+		sleep 1
+		capture_audio both
+		wait "$video_pid" || fail 'video capture failed'
 		check --video "$results/both.uyvy" --audio "$results/both.s32"
 		;;
 	switch-std)
-		say 'standard switching and detection'
+		say 'standard detection, and capturing in the wrong standard'
 		device=$(video_device) || { fail 'no video device'; return; }
-		for want in ntsc pal; do
-			echo "-- source and driver both $want"
-			echo "   (play the $want clip now if it is not running)"
-			v4l2-ctl -d "$device" --set-standard "$want" \
-				|| fail "could not set $want"
-			v4l2-ctl -d "$device" --get-standard
-			v4l2-ctl -d "$device" --get-detected-standard \
-				|| fail "querystd failed in $want"
-		done
+		# One standard of the detected family: V4L2_STD_NTSC_M, V4L2_STD_PAL_B
+		case $std in
+		ntsc)	other=pal; bit=0x1000 ;;
+		*)	other=ntsc; bit=0x1 ;;
+		esac
+		detected=$(v4l2-ctl -d "$device" --get-detected-standard |
+			   sed -n 's/^Video Standard = //p')
+		if [ -n "$detected" ] && [ $((detected & bit)) -ne 0 ]; then
+			echo "detected $detected for the $std source"
+		else
+			fail "detected '${detected:-nothing}' for the $std source"
+		fi
+		# The parser must cope with fields of the wrong length, by
+		# returning the buffers, if as errors, rather than hanging
+		v4l2-ctl -d "$device" --set-standard "$other" >/dev/null
+		timeout 20 v4l2-ctl -d "$device" --stream-mmap --stream-count=50 \
+			--stream-to=/dev/null >/dev/null 2>&1 ||
+			fail "capturing in $other from a $std source did not finish"
+		v4l2-ctl -d "$device" --set-standard "$std" >/dev/null
+		capture_video std "$(frames 4)" && check --video "$results/std.uyvy"
 		;;
 	input-sweep)
 		say 'which input sees the signal'
