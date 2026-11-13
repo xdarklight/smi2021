@@ -369,7 +369,11 @@ static void smi2021_isoc_complete(struct urb *urb)
 	}
 
 	rc = usb_submit_urb(urb, GFP_ATOMIC);
-	if (rc)
+	/*
+	 * -EPERM: the stream is stopping, and usb_kill_urb() refuses the
+	 * resubmission of a URB that completed just before it.
+	 */
+	if (rc && rc != -EPERM)
 		dev_warn_ratelimited(smi2021->dev,
 				     "urb resubmit failed: %d\n", rc);
 }
