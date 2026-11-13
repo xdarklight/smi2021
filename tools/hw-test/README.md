@@ -162,15 +162,23 @@ capture and ends with a look at the kernel log.
 `soak.py` captures video and audio for as long as asked, an hour by
 default, and checks them as they arrive, since a raw capture of that
 length would not fit anywhere. It logs every anomaly with the time it
-happened, and the memory of the system once a minute. Given when mpv
-started and how long the clip is, it reports what happens at the loops of
-the clip separately, as that is the player's:
+happened, and the memory of the system once a minute:
 
-    start=$(( $(date +%s) - $(ps -o etimes= -p $(pgrep -x mpv)) ))
-    ./soak.py --std ntsc --minutes 60 --loop-start $start --loop-period 239.1723
+    ./soak.py --std ntsc --minutes 60 --loop-period 239.1723
 
 The loop period is the number of frames of the clip over the frame rate;
-`make-pattern.sh` says how many frames it made.
+`make-pattern.sh` says how many frames it made. The first gap in the audio
+marks a loop of the clip, and what happens close to that and every loop
+period after it is reported apart, as it is the player's. The age of the
+mpv process is no good for this: the clip starts some time after the
+process does, and the loops were missed by more than the margin.
+
+Over an hour mpv also slips a few times for minutes on end, when its
+clock and the vertical sync of the output are close to a field apart:
+one frame is shown for a single field, the next one for three, and the
+counter skips and repeats. `soak.py` follows the sequence numbers of the
+buffers, which the driver also counts for frames it had to drop, and only
+puts skips and repeats down to the source while there was no gap in them.
 
 `dmabuf-test.py` covers DMABUF, which v4l2-compliance can only test with a
 second V4L2 device that exports buffers, and the board has none that will.

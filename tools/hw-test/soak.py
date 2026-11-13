@@ -9,9 +9,20 @@ follows the phase of the tone, and only keeps what went wrong, with the
 time it happened. Once a minute it also notes the memory of the system, to
 find leaks.
 
-mpv skips or repeats a frame and leaves a gap in the audio where it loops
-the test clip. Given when mpv started and how long the clip is, anything
-close to such a loop is reported as the source's, apart from the rest.
+Not everything that looks wrong comes from the capture:
+
+- mpv skips or repeats a frame and leaves a gap in the audio where it loops
+  the test clip. Given how long the clip is, the first gap in the audio
+  tells where the loops are, and anything close to one is the source's.
+  Should that first gap not be a loop, the real loops turn up as failures.
+- mpv's clock and the vertical sync of the output drift against each
+  other. When they are close to a field apart, mpv shows a frame for one
+  field and the next for three, and the counter skips and repeats.
+
+The sequence numbers of the buffers tell the two apart from frames that
+the capture lost: a frame the driver had to drop leaves a gap in them. So
+skipped or repeated counters while the sequence numbers go on without a
+gap are put down to the source.
 
 Copyright (C) 2026 Martin Blumenstingl <martin.blumenstingl@googlemail.com>
 """
@@ -19,6 +30,7 @@ Copyright (C) 2026 Martin Blumenstingl <martin.blumenstingl@googlemail.com>
 import argparse
 import importlib.util
 import pathlib
+import re
 import subprocess
 import sys
 import threading
@@ -42,9 +54,10 @@ class Log:
         self.lock = threading.Lock()
         self.events = []
 
-    def add(self, when, what):
+    def add(self, when, what, fatal=False):
+        """Note an anomaly; fatal ones fail the test wherever they are"""
         with self.lock:
-            self.events.append((when, what))
+            self.events.append((when, what, fatal))
             print(f'{when - self.start:9.2f} s  {what}', flush=True)
 
 
@@ -56,6 +69,22 @@ def read_exactly(stream, n):
             break
         data += more
     return data
+
+
+def sequence(stream, log, stats):
+    """Follow the sequence numbers that v4l2-ctl --verbose prints"""
+    last = None
+    for line in stream:
+        m = re.match(rb'cap dqbuf: *\d+ seq: *(\d+)', line)
+        if not m:
+            continue
+        seq = int(m.group(1))
+        if last is not None and seq != last + 1:
+            stats['dropped'] += seq - last - 1
+            log.add(time.time(), f'capture: {seq - last - 1} frames dropped '
+                                 f'before sequence {seq}', fatal=True)
+        last = seq
+        stats['buffers'] += 1
 
 
 def video(stream, height, conf, log, stats):
@@ -75,19 +104,21 @@ def video(stream, height, conf, log, stats):
         stats['frames'] += 1
         if amb1[0] or amb2[0]:
             log.add(now, f'video: frame {stats["frames"]} decoded from '
-                         'blocks near the threshold')
+                         'blocks near the threshold', fatal=True)
         if last is not None:
             step = (f1 - last) % modulus
             if step == 0:
                 log.add(now, f'video: counter {f1} repeated')
             elif step > modulus // 2:
-                log.add(now, f'video: counter went back {modulus - step}')
+                log.add(now, f'video: counter went back {modulus - step}',
+                        fatal=True)
             elif step > 1:
                 log.add(now, f'video: {step - 1} frames missing before '
                              f'counter {f1}')
         skew = (f2 - f1) % modulus
         if skew not in (0, 1):
-            log.add(now, f'video: woven from fields {f1} and {f2}')
+            log.add(now, f'video: woven from fields {f1} and {f2}',
+                    fatal=True)
         last = f1
 
 
@@ -128,10 +159,12 @@ def audio(stream, conf, log, stats):
             if c in last:
                 delta = np.angle(np.exp(1j * (phase - last[c])))
                 if abs(delta) > 0.3:
+                    if stats['first_gap'] is None:
+                        stats['first_gap'] = now
                     log.add(now, f'audio: {("left", "right")[c]} '
                                  f'discontinuity, phase jump of '
                                  f'{-delta / (2 * np.pi * m / rate):+.0f} '
-                                 f'samples modulo {rate // m}')
+                                 f'samples modulo {rate // m}', fatal=True)
             last[c] = phase
 
 
@@ -147,7 +180,7 @@ def near_loop(when, loop_start, period):
     if not period:
         return False
     k = round((when - loop_start) / period)
-    return k >= 1 and abs(when - (loop_start + k * period)) < LOOP_MARGIN
+    return abs(when - (loop_start + k * period)) < LOOP_MARGIN
 
 
 def main():
@@ -156,9 +189,6 @@ def main():
     parser.add_argument('--audio-device', default='hw:1,0')
     parser.add_argument('--std', choices=('ntsc', 'pal'), default='ntsc')
     parser.add_argument('--minutes', type=float, default=60)
-    parser.add_argument('--loop-start', type=float, default=0,
-                        help='when the player started the clip, in seconds '
-                             'since the epoch')
     parser.add_argument('--loop-period', type=float, default=0,
                         help='length of the clip in seconds')
     parser.add_argument('--video-file', type=pathlib.Path,
@@ -170,7 +200,9 @@ def main():
     height = 480 if args.std == 'ntsc' else 576
     start = time.time()
     log = Log(start)
-    stats = {'frames': 0, 'audio_blocks': 0, 'full_scale': 0, 'tones': '?'}
+    stats = {'frames': 0, 'audio_blocks': 0, 'full_scale': 0, 'tones': '?',
+             'buffers': 0, 'dropped': 0,
+             'first_gap': None}
     procs = []
 
     threads = []
@@ -189,12 +221,13 @@ def main():
         rate = 30000 / 1001 if args.std == 'ntsc' else 25
         v = subprocess.Popen(['v4l2-ctl', '-d', args.device, '--stream-mmap',
                               f'--stream-count={int(seconds * rate)}',
-                              '--stream-to', '-'],
-                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                              '--verbose', '--stream-to', '-'],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                              bufsize=0)
         # Read from the start: a full pipe would stall v4l2-ctl, and then
         # the driver drops frames for want of buffers
         follow(video, v.stdout, height, conf, log, stats)
+        follow(sequence, v.stderr, log, stats)
         # Let the video stream run first, so that the audio joins it
         time.sleep(2)
         a = subprocess.Popen(['arecord', '-q', '-D', args.audio_device,
@@ -219,9 +252,27 @@ def main():
         p.wait()
     mem.append((time.time(), *meminfo()))
 
-    source = [e for e in log.events
-              if near_loop(e[0], args.loop_start, args.loop_period)]
-    other = [e for e in log.events if e not in source]
+    first_gap = stats['first_gap']
+    # A frame lost by the capture is never the source's
+    loops = [e for e in log.events if first_gap is not None and
+             not e[1].startswith('capture:') and
+             near_loop(e[0], first_gap, args.loop_period)]
+    rest = [e for e in log.events if e not in loops]
+    fatal = [e for e in rest if e[2]]
+    # Skips and repeats of the counter, while no frame went missing in
+    # the capture, are the cadence of the source
+    if stats['buffers'] or not args.video_file:
+        drops = [e[0] for e in fatal if e[1].startswith('capture:')]
+        cadence = [e for e in rest if not e[2] and
+                   all(abs(e[0] - d) > 1 for d in drops)]
+        # The counter skips where the capture dropped frames
+        fatal = sorted(set(rest) - set(cadence))
+    else:
+        cadence = []
+        fatal = rest
+    skipped = sum(int(re.match(r'video: (\d+)', e[1]).group(1))
+                  for e in cadence if 'missing' in e[1])
+    repeated = sum('repeated' in e[1] for e in cadence)
     duration = time.time() - start
     print()
     print(f'{duration / 60:.1f} min, {stats["frames"]} frames, '
@@ -229,11 +280,16 @@ def main():
           f'({stats["tones"]}), {stats["full_scale"]} samples at full scale')
     print(f'MemAvailable {mem[0][1] // 1024} -> {mem[-1][1] // 1024} MiB, '
           f'Slab {mem[0][2] // 1024} -> {mem[-1][2] // 1024} MiB')
-    print(f'{len(source)} anomalies at loops of the clip, '
-          f'{len(other)} anywhere else')
-    for when, what in other[:20]:
+    if stats['buffers']:
+        print(f'{stats["buffers"]} buffers, {stats["dropped"]} frames '
+              'dropped by the capture')
+    print(f'{len(loops)} anomalies at loops of the clip, '
+          f'{len(cadence)} cadence slips of the source '
+          f'({skipped} counters skipped, {repeated} repeated), '
+          f'{len(fatal)} anywhere else')
+    for when, what, _ in fatal[:20]:
         print(f'  {when - start:9.2f} s  {what}')
-    bad = other or stats['frames'] == 0
+    bad = fatal or stats['frames'] == 0
     print('FAIL' if bad else 'PASS')
     return 1 if bad else 0
 
