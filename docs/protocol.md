@@ -309,24 +309,37 @@ The engines are at 0x1780 and 0x3180, with the same layout:
 | +4 | slave address, 8 bit |
 | +5… | data bytes |
 
-Commands used by the driver:
+Commands seen in use:
 
 | Command | Transfer |
 |---------|----------|
 | 0x84 | write the data bytes |
 | 0xa0 | read the data bytes |
 | 0xc0 | write the subaddress, then the data bytes |
+| 0xe0 | write the subaddress, then read the data bytes |
 
 Bit 5 selects a read, which is the only bit whose meaning is certain. The
 firmware's checks above suggest that bit 7 starts a transfer and that bit 6
 adds the subaddress byte.
 
-To read a register of the decoder, the driver first writes the register
-number with 0x84, then reads one byte with 0xa0. The Windows driver does the
-same, but sends 0x00 instead of the register number with 0xa0 (reported),
-which suggests that 0xa0 does not use the subaddress. Bit 2, only set in
-0x84, may keep the bus for a repeated start, which would make the pair the
-combined write and read of the SAA7113H datasheet (inferred).
+The Windows driver reads a register of the decoder by writing the register
+number with 0x84, then reading one byte with 0xa0, with 0x00 instead of the
+register number (reported), which suggests that 0xa0 does not use the
+subaddress. On an EasyCAP 002 with `smi2021_3c.bin`, about a quarter of
+these reads return the register that an earlier transfer left the
+decoder's subaddress at, without any failure in the reply (observed). So
+the setting of the subaddress with 0x84 is lost that often, and as a
+write, without a trace.
+
+0xe0 with one address byte, the subaddress, does the combined write and
+read of the SAA7113H datasheet in one transfer; the reply has the
+subaddress as its address byte, followed by the data. About one in five of
+these reads fails despite the firmware's retries, independently of the
+ones before and regardless of pauses between the requests, and is reported
+in bit 0 of the command in the reply. A read that does not report a
+failure has always returned the right value. Writes with 0xc0 have not
+been seen to fail (observed). The driver reads with 0xe0 and tries again
+when a read fails.
 
 The firmware completes a transfer, including its retries, before it
 acknowledges the request, so the host needs no delays between requests.

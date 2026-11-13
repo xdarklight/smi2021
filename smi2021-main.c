@@ -61,14 +61,19 @@
 #define SMI2021_REG_FLAG_BRIDGE		BIT(7)
 
 /* Commands of the bridge's i2c engine, for smi2021_reg_msg.cntl */
-#define SMI2021_I2C_CMD_WRITE		0x84	/* write the data bytes */
-#define SMI2021_I2C_CMD_READ		0xa0	/* read the data bytes */
 #define SMI2021_I2C_CMD_WRITE_REG	0xc0	/* write subaddress and data */
+#define SMI2021_I2C_CMD_READ_REG	0xe0	/* write subaddress, read data */
 /*
  * The firmware retries a failed transfer 16 times. If it still fails, this
  * flag is set in the reply, so a failure is only reported for reads.
  */
 #define SMI2021_I2C_CMD_NAK		BIT(0)
+/*
+ * Even so, about one read in five fails, independently of the ones before
+ * it, so a read is tried again a few times. Writes have not been seen to
+ * fail.
+ */
+#define SMI2021_I2C_READ_TRIES		8
 
 /*
  * The bridge's microcontroller is an AVR whose I/O registers match those of an
@@ -197,39 +202,46 @@ static int smi2021_i2c_write(struct smi2021 *smi2021, u8 addr, u8 reg, u8 val)
 	return smi2021_send_reg_msg(smi2021, &msg);
 }
 
+/*
+ * Read a register with one transfer that writes the subaddress and then reads
+ * with a repeated start. Setting the subaddress with a write of its own and
+ * then reading, as the vendor driver does, returns the register that an
+ * earlier transfer left the subaddress at about a quarter of the time, and
+ * nothing reports that.
+ */
 static int smi2021_i2c_read(struct smi2021 *smi2021, u8 addr, u8 reg, u8 *val)
 {
-	struct smi2021_reg_msg msg = {
+	const struct smi2021_reg_msg req = {
 		.head = SMI2021_REG_CTRL_HEAD,
 		.i2c_addr = addr << 1,
-		.cntl = SMI2021_I2C_CMD_WRITE,
-		.size = sizeof(reg),
-		.data.val = reg,
+		.cntl = SMI2021_I2C_CMD_READ_REG,
+		.flags = sizeof(req.data.i2c.reg),
+		.size = sizeof(req.data.i2c.val),
+		.data.i2c.reg = reg,
 	};
+	struct smi2021_reg_msg reply;
+	unsigned int i;
 	int rc;
 
 	guard(mutex)(&smi2021->reg_lock);
 
-	/* Set the register pointer, then read one byte */
-	rc = smi2021_send_reg_msg(smi2021, &msg);
-	if (rc)
-		return rc;
+	for (i = 0; i < SMI2021_I2C_READ_TRIES; i++) {
+		rc = smi2021_send_reg_msg(smi2021, &req);
+		if (rc)
+			return rc;
 
-	msg.cntl = SMI2021_I2C_CMD_READ;
-	rc = smi2021_send_reg_msg(smi2021, &msg);
-	if (rc)
-		return rc;
+		rc = smi2021_ctrl_read(smi2021->udev, req.head, &reply,
+				       sizeof(reply));
+		if (rc)
+			return rc;
 
-	rc = smi2021_ctrl_read(smi2021->udev, msg.head, &msg, sizeof(msg));
-	if (rc)
-		return rc;
+		if (!(reply.cntl & SMI2021_I2C_CMD_NAK)) {
+			*val = reply.data.i2c.val;
+			return 0;
+		}
+	}
 
-	if (msg.cntl & SMI2021_I2C_CMD_NAK)
-		return -EIO;
-
-	*val = msg.data.val;
-
-	return 0;
+	return -EIO;
 }
 
 static int smi2021_smbus_xfer(struct i2c_adapter *adap, u16 addr,
