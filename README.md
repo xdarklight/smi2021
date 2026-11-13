@@ -129,11 +129,104 @@ missing `Signed-off-by:`, and builds without warnings with `W=1`. Still to
 do:
 
 - Test on real hardware and attach `v4l2-compliance` output, which reviewers
-  asked for in 2013.
+  asked for in 2013. See [Testing on hardware](#testing-on-hardware) for the
+  cases that cannot be covered without a device.
 - Run sparse, which needs a version built from git, as the kernel requires
   `__typeof_unqual__` support that no sparse release has yet.
 - Get the firmware blobs into `linux-firmware`. Their redistribution licence
   is not clearly established, which is the main open blocker.
+
+## Testing on hardware
+
+### Audio with and without video
+
+The PCM device can be used with or without a video capture, and either of the
+two may start and stop while the other one is streaming. Every such transition
+restarts the isochronous stream in the other mode, so all four orders are
+worth going through:
+
+```bash
+arecord -D hw:CARD=SMI2021 -f S32_LE -r 48000 -c 2 -d 10 audio-only.wav
+```
+
+```bash
+v4l2-ctl -d /dev/video0 --stream-mmap --stream-count=250
+```
+
+```bash
+arecord -D hw:CARD=SMI2021 -f S32_LE -r 48000 -c 2 -d 30 both.wav & \
+	sleep 5 && v4l2-ctl -d /dev/video0 --stream-mmap --stream-count=250
+```
+
+Starting or stopping a video capture while audio is running drops a few
+milliseconds of audio, because the stream has to be restarted in the other
+mode; the driver has to find the sample alignment again by itself, so the
+recording must not be left with swapped channels or shifted samples.
+Unplugging the device while either or both are streaming must not leave a
+stuck process behind.
+
+### PAL frames are accepted only at the full 288 lines per field
+
+With the decoder settings the driver uses, the decoder flags 288 active lines
+per field for 625 line standards and 242 for 525 line ones, see
+[`docs/protocol.md`](docs/protocol.md). The driver captures 288 lines per field
+for PAL and 240 of the 242 for NTSC, so NTSC tolerates a field that is up to
+two lines short while PAL tolerates none: `smi2021_field_done()` wants the full
+`720 * 2 * 288` bytes before it accepts a field, and a field that falls short
+makes the frame come back with `V4L2_BUF_FLAG_ERROR`, or be dropped outright if
+it was the first field of the frame.
+
+Whether real hardware ever sends a short PAL field is untested. To find out:
+
+1. Lock a stable PAL source on the selected input and check that the decoder
+   agrees before capturing anything:
+
+```bash
+v4l2-ctl -d /dev/video0 --set-standard pal --get-standard --get-input --get-fmt-video
+```
+
+2. Capture a few hundred frames and count the buffers that came back flagged:
+
+```bash
+v4l2-ctl -d /dev/video0 --stream-mmap --stream-count=600 --verbose 2>&1 | tee pal.log
+```
+
+```bash
+grep -c ERROR pal.log
+```
+
+3. Run the same capture with an NTSC source as the control, where the two
+   spare lines should absorb a short field:
+
+```bash
+v4l2-ctl -d /dev/video0 --set-standard ntsc --stream-mmap --stream-count=600 --verbose 2>&1 | tee ntsc.log
+```
+
+4. Repeat the PAL run after each of the transitions that are the most likely
+   to produce a short field, counting the flagged buffers every time:
+
+   - switching the standard with `--set-standard` and streaming again
+   - switching the input with `--set-input=N` between runs
+   - pulling the cable out of the source and plugging it back in while
+     streaming
+   - starting the capture before the source has locked
+
+Expected result: PAL and NTSC report the same, near zero, number of flagged
+buffers, and buffers are only flagged while the signal is genuinely absent or
+changing.
+
+To see the number of lines the decoder actually sends, rather than infer it,
+add a temporary `dev_dbg()` to `smi2021_parse_trc()` that prints
+`buf->pos / SMI2021_BYTES_PER_LINE` where a field ends, and turn it on with:
+
+```bash
+echo 'file smi2021-main.c +p' | sudo tee /sys/kernel/debug/dynamic_debug/control
+```
+
+If PAL reports flagged buffers where NTSC does not, the exact 288 line
+requirement is too strict. The fix is to allow a field to end a line or two
+early, by giving `smi2021_field_done()` the same kind of tolerance that NTSC
+gets for free, rather than by capturing fewer lines.
 
 ## Testing without hardware
 
