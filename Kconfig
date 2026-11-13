@@ -1,41 +1,17 @@
+# SPDX-License-Identifier: GPL-2.0-only
 config VIDEO_SMI2021
-	tristate "Somagic SMI2021 USB video/audio capture support"
+	tristate "Somagic SMI2021 USB video capture support"
 	depends on VIDEO_DEV && I2C && SND && USB
 	select VIDEOBUF2_VMALLOC
 	select VIDEO_SAA711X
 	select SND_PCM
 	help
-	  This is a video4linux driver for SMI2021 based video capture devices.
+	  This is a video4linux driver for Somagic SMI2021 based analog
+	  video capture devices, which are sold under names such as
+	  EasyCAP DC60 and EasyCAP 002.
+
+	  These devices have no on-board flash and need a firmware to be
+	  uploaded every time they are plugged in.
 
 	  To compile this driver as a module, choose M here: the
-	  module will be called smi2021
-
-config VIDEO_SMI2021_INIT_AS_GM7113C
-	bool "Force SMI2021 init as gm7113c"
-	default n
-	depends on VIDEO_SMI2021
-	---help---
-	  This option override chip version in smi2021 device to 10 as supported 
-	  now version gm7113c in saa7115 module.
-	  Do not need to set this option as you can always use forceasgm=1 module 
-	  option.
-	  
-	  If you are not sure, say N here.
-
-choice
-	prompt "Type board decoder chip"
-	default VIDEO_SMI2021_CHIP_AUTODETECT
-	  depends on VIDEO_SMI2021 && !VIDEO_SMI2021_INIT_AS_GM7113C
-	help
-	  This option override chip version in smi2021 device.
-	  Do not need to set this option as you can always use chiptype in nodule option.
-	  
-	  If you are not sure, leave Auto here.
-	config VIDEO_SMI2021_CHIP_AUTODETECT
-	  bool "Auto"
-	config VIDEO_SMI2021_CHIP_GM7113C
-	  bool "gm7113C"
-	config VIDEO_SMI2021_CHIP_SAA7113
-	  bool "saa7113"
-endchoice
-
+	  module will be called smi2021.
