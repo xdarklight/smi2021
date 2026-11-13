@@ -233,6 +233,25 @@ requirement is too strict. The fix is to allow a field to end a line or two
 early, by giving `smi2021_field_done()` the same kind of tolerance that NTSC
 gets for free, rather than by capturing fewer lines.
 
+### No frames from a 60 Hz signal while a 50 Hz standard is set
+
+With a 625 line standard set and a 525 line signal on the input, the decoder
+keeps the field bit of every timing reference code at 0. It still sends
+vertical blanking for every field, but the driver starts a frame where the
+second field ends, F going from 1 to 0, and that never happens. No buffer is
+handed back at all: streaming waits for the first frame and `read()` blocks,
+which also holds up the read/write test of `v4l2-compliance -s`. The other
+way round, a 625 line signal while a 525 line standard is set, frames arrive
+as usual, and so they do from an input without a signal, where the decoder
+runs free and keeps toggling the field bit.
+
+`VIDIOC_QUERYSTD` does not help here: with a 625 line standard set, the
+decoder runs at 50 Hz, reports that it is not locked to the 60 Hz signal, and
+the saa7115 driver answers that it detected no standard at all. Setting a 525
+line standard is the remedy, after which `VIDIOC_QUERYSTD` reports the 525
+line standards again. The driver does not try to make frames out of the
+blanking alone, as it could only guess which field is which.
+
 ## Testing without hardware
 
 `tools/parser-test/` builds a userspace harness that feeds synthetic
