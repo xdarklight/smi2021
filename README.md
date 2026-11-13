@@ -220,7 +220,7 @@ add a temporary `dev_dbg()` to `smi2021_parse_trc()` that prints
 `buf->pos / SMI2021_BYTES_PER_LINE` where a field ends, and turn it on with:
 
 ```bash
-echo 'file smi2021-main.c +p' | sudo tee /sys/kernel/debug/dynamic_debug/control
+echo 'file smi2021-v4l2.c +p' | sudo tee /sys/kernel/debug/dynamic_debug/control
 ```
 
 If PAL reports flagged buffers where NTSC does not, the exact 288 line
@@ -232,7 +232,7 @@ gets for free, rather than by capturing fewer lines.
 
 `tools/parser-test/` builds a userspace harness that feeds synthetic
 ITU-R BT.656 streams through the driver's frame parser and buffer handling,
-extracted verbatim from `smi2021-main.c`, and checks the resulting frames
+extracted verbatim from `smi2021-v4l2.c`, and checks the resulting frames
 byte for byte, including the 242 active lines per field that the decoder
 sends for NTSC:
 

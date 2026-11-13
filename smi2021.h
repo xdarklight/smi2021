@@ -171,6 +171,8 @@ void smi2021_stop_streaming(struct vb2_queue *vq);
 int smi2021_vb2_setup(struct smi2021 *smi2021);
 int smi2021_video_register(struct smi2021 *smi2021);
 void smi2021_clear_queue(struct smi2021 *smi2021, enum vb2_buffer_state state);
+void smi2021_parse_video(struct smi2021 *smi2021, const u8 *p,
+			 unsigned int size);
 
 /* Provided by smi2021-audio.c */
 int smi2021_snd_register(struct smi2021 *smi2021);
