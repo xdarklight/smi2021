@@ -33,23 +33,18 @@ v4l2-ctl -d /dev/video0 --list-inputs
 
 ### In a kernel tree
 
-Copy `*.c`, `*.h`, `Kconfig` and `Makefile` into
-`drivers/media/usb/smi2021/`. Then add this to the "Analog TV USB devices"
-block of `drivers/media/usb/Kconfig`, between pvrusb2 and stk1160:
+`tools/upstream-patch.py` turns this repository into the patch that adds the
+driver to a Linux tree, including the `Kconfig`, `Makefile` and `MAINTAINERS`
+hunks. It works in a temporary git worktree, so the tree itself is left
+alone:
 
-```
-source "drivers/media/usb/smi2021/Kconfig"
-```
-
-and this to `drivers/media/usb/Makefile`, between `CONFIG_VIDEO_PVRUSB2` and
-`CONFIG_VIDEO_STK1160`:
-
-```
-obj-$(CONFIG_VIDEO_SMI2021) += smi2021/
+```bash
+tools/upstream-patch.py ../linux /tmp/smi2021-patch
 ```
 
-Enable `CONFIG_MEDIA_ANALOG_TV_SUPPORT` and `CONFIG_VIDEO_SMI2021`, then build
-as usual.
+Apply the resulting patch with `git am`, enable
+`CONFIG_MEDIA_ANALOG_TV_SUPPORT` and `CONFIG_VIDEO_SMI2021`, and build as
+usual.
 
 ### Out of tree
 
@@ -61,7 +56,8 @@ make -C /lib/modules/$(uname -r)/build M=$PWD CONFIG_VIDEO_SMI2021=m modules
 ```
 
 Dependencies that must be enabled in the target kernel: `VIDEO_DEV`, `I2C`,
-`USB`, `SND`, `SND_PCM`, `VIDEOBUF2_VMALLOC` and `VIDEO_SAA711X`.
+`USB`, `SND`, `SND_PCM`, `VIDEOBUF2_VMALLOC` and `VIDEO_SAA711X`. The driver
+follows the current kernel APIs, so older kernels may lack some of them.
 
 ## Firmware
 
@@ -83,26 +79,25 @@ modprobe smi2021 firmware_version=0x3f
 Because the driver is not in mainline yet, the upstream posting is a single
 "add new driver" patch, as was requested during the
 [2013 review](https://lkml.iu.edu/hypermail/linux/kernel/1303.1/03761.html)
-of the original submission. In addition to the files here it needs the two
-hunks shown under "In a kernel tree" above, and a `MAINTAINERS` entry
-between "SOLIDRUN CUBOX-I/HUMMINGBOARD SUPPORT" and "SONIC NETWORK DRIVER":
+of the original submission. `tools/upstream-patch.py`, see above, generates
+it with its commit message.
 
-```
-SOMAGIC SMI2021 VIDEO CAPTURE DRIVER
-M:	Martin Blumenstingl <martin.blumenstingl@googlemail.com>
-L:	linux-media@vger.kernel.org
-S:	Maintained
-T:	git git://linuxtv.org/media.git
-F:	drivers/media/usb/smi2021/
-```
+That patch carries no `Signed-off-by:`. Only the human submitter can certify
+the Developer's Certificate of Origin, see
+`Documentation/process/coding-assistants.rst`; add yours with `git am -s`
+after reviewing it. The same document asks for an `Assisted-by:` tag
+instead of the `Co-Authored-By:` used in this repository, and
+`Documentation/process/generated-content.rst` asks to be transparent about
+what a tool generated, which belongs in the cover letter.
 
-The commits here carry no `Signed-off-by:`; add yours with
-`git commit --amend -s` before posting.
-
-Still to do before posting:
+Before posting, the patch passes `checkpatch.pl --strict` apart from the
+missing `Signed-off-by:`, and builds without warnings with `W=1`. Still to
+do:
 
 - Test on real hardware and attach `v4l2-compliance` output, which reviewers
   asked for in 2013.
+- Run sparse, which needs a version built from git, as the kernel requires
+  `__typeof_unqual__` support that no sparse release has yet.
 - Get the firmware blobs into `linux-firmware`. Their redistribution licence
   is not clearly established, which is the main open blocker.
 
