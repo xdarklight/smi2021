@@ -66,6 +66,13 @@ nothing on it.
 
     amixer -c 0 sset 'AIU ACODEC I2S Lane Select' 0
 
+At an `ACODEC` volume of 255 the chain from the board's output to the
+capture has a gain of about +10 dB. That suits the test tones, which are
+at -18 dBFS, but loud program material drives the CS5340 past full scale;
+it then swings between the rails for a few milliseconds, which sounds like
+a click. Attenuate such material by 10 dB, for example with
+`--af=lavfi=[volume=-10dB]` for mpv.
+
 These controls have been found back at their defaults during a session,
 for reasons not found; `alsactl store` keeps the working state for when
 the board's state gets restored, and a capture with only the hum at the
