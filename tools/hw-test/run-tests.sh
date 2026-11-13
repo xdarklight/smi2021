@@ -52,8 +52,8 @@ usage: $0 [--from N] [--only N] [--risky] [--list]
   --from   start at step N (default: $from)
   --only   run just step N
   --attended
-           also run the steps that need somebody at the desk: step 10 wants
-           a cable pulled, and steps 11 and 12 can wedge the board. Without
+           also run the steps that need somebody at the desk: step 11 wants
+           a cable pulled, and steps 12 and 13 can wedge the board. Without
            it the run stops before them.
 
 Environment: SMI2021_RESULTS, SMI2021_CAPTURES, SMI2021_MODULE,
@@ -328,15 +328,31 @@ run_step() {
 		read -r _
 		;;
 	unbind-while-streaming)
-		say 'rmmod while a capture is running'
+		# rmmod is refused while the device is open, as it should be;
+		# unbinding takes the device away from the driver as an unplug
+		# does, without one
+		say 'unbinding the driver while a capture is running'
 		device=$(video_device) || { fail 'no video device'; return; }
+		set -- /sys/bus/usb/drivers/smi2021/*:*
+		[ -e "$1" ] || { fail 'smi2021 is bound to nothing'; return; }
+		intf=$(basename "$1")
 		v4l2-ctl -d "$device" --stream-mmap --stream-count=100000 \
 			>/dev/null 2>&1 &
 		streamer=$!
 		sleep 3
-		rmmod smi2021 || fail 'rmmod during streaming failed'
-		kill "$streamer" 2>/dev/null || :
+		echo "$intf" > /sys/bus/usb/drivers/smi2021/unbind ||
+			fail 'unbind during streaming failed'
+		i=0
+		while kill -0 "$streamer" 2>/dev/null && [ "$i" -lt 100 ]; do
+			sleep 0.1; i=$((i + 1))
+		done
+		if kill -0 "$streamer" 2>/dev/null; then
+			fail 'the capture still runs 10 s after the unbind'
+			kill -9 "$streamer"
+		fi
 		wait "$streamer" 2>/dev/null || :
+		echo "$intf" > /sys/bus/usb/drivers/smi2021/bind ||
+			fail 'binding again failed'
 		;;
 	unplug-while-streaming)
 		say 'physical disconnect while a capture is running'

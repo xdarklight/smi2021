@@ -124,8 +124,8 @@ Then, in another window:
     ./run-tests.sh --list
     ./run-tests.sh
 
-The run stops before step 10. Steps 10 to 12 need somebody at the desk --
-step 10 wants the composite cable pulled, and steps 11 and 12 are the ones
+The run stops before step 11. Steps 11 to 13 need somebody at the desk --
+step 11 wants the composite cable pulled, and steps 12 and 13 are the ones
 that can take the board down -- so they only run with `--attended`. After a
 crash, `--from N` picks up where the breadcrumb says it stopped.
 
