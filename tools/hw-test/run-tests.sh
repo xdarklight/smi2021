@@ -162,13 +162,18 @@ input_status() {
 		}'
 }
 
+# Select the standard and the input to capture, and let the decoder lock
+# onto them: the frames it sends before that are garbage
+prepare_video() {
+	device=$(video_device) || { fail "no smi2021 video device"; return 1; }
+	v4l2-ctl -d "$device" --set-standard "$std" >/dev/null 2>&1 || :
+	v4l2-ctl -d "$device" --set-input "$connected" >/dev/null 2>&1 || :
+	sleep 1
+}
+
 capture_video() {
 	device=$(video_device) || { fail "no smi2021 video device"; return 1; }
 	out=$results/$1.uyvy
-	v4l2-ctl -d "$device" --set-standard "$std" >/dev/null 2>&1 || :
-	v4l2-ctl -d "$device" --set-input "$connected" >/dev/null 2>&1 || :
-	# Frames from before the decoder locked onto the input are garbage
-	sleep 1
 	timeout $((duration + 20)) v4l2-ctl -d "$device" \
 		--stream-mmap --stream-count="$2" --stream-to="$out" \
 		>/dev/null || { fail "$1: capture failed"; return 1; }
@@ -225,7 +230,7 @@ run_step() {
 		;;
 	capture-video)
 		say 'video only'
-		capture_video video "$(frames "$duration")" &&
+		prepare_video && capture_video video "$(frames "$duration")" &&
 			check --video "$results/video.uyvy"
 		;;
 	capture-audio)
@@ -236,6 +241,7 @@ run_step() {
 		say 'video and audio at the same time'
 		# Video first, so that the audio joins the running capture
 		# rather than making the driver restart the stream for it
+		prepare_video || return
 		capture_video both "$(frames $((duration + 2)))" &
 		video_pid=$!
 		sleep 1
@@ -264,8 +270,8 @@ run_step() {
 		timeout 20 v4l2-ctl -d "$device" --stream-mmap --stream-count=50 \
 			--stream-to=/dev/null >/dev/null 2>&1 ||
 			fail "capturing in $other from a $std source did not finish"
-		v4l2-ctl -d "$device" --set-standard "$std" >/dev/null
-		capture_video std "$(frames 4)" && check --video "$results/std.uyvy"
+		prepare_video && capture_video std "$(frames 4)" &&
+			check --video "$results/std.uyvy"
 		;;
 	input-sweep)
 		say 'which input sees the signal'
