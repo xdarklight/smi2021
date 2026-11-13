@@ -121,6 +121,16 @@ sends for NTSC:
 make -C tools/parser-test check
 ```
 
+`tools/audio-test/` does the same for the audio ring buffer handling of
+`smi2021_audio.c`: a clean stream has to arrive byte for byte with periods
+counted exactly, data after lost bytes has to be sample aligned again, and
+random corruption must never write outside the buffer, for buffer sizes
+down to one frame:
+
+```bash
+make -C tools/audio-test check
+```
+
 ## Credits
 
 Jon Arne Jørgensen, Tony Brown, Michal Demin, Jeffry Johnston, David
