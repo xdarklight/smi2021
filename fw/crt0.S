@@ -88,6 +88,13 @@ __do_copy_data:
 	call	main
 3:	rjmp	3b
 
+#if FW_ISR_BARE == 1
+	/* interrupt test: vector 11 does nothing at all */
+	.global	__vector_11
+__vector_11:
+	reti
+#endif
+
 /*
  * Interrupt census. Each stub pushes r24, loads its vector number and
  * jumps to the common part, which increments irq_census[n], saturating at

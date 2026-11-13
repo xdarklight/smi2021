@@ -25,11 +25,13 @@ its startup code.
     make IRQ=1                        # enable interrupts, see below
     make IRQ=1 ISR_EVENTS=0           # vector 11 only counts and logs
     make IRQ=1 VECTORS=rjmp48         # 48 RJMP vectors, for the census
+    make IRQ=1 ISR_BARE=1             # vector 11 is a bare RETI
+    make IRQ=1 ISR_BARE=2             # vector 11 counts, reads no register
 
 `IRQ=0`, the default, never enables interrupts and polls the controller,
 as `docs/hardware.md` "Interrupt" advises; with interrupts enabled the
 firmware fails within a few control transfers, for reasons not yet known.
-`ISR_EVENTS` and `VECTORS` only matter for the interrupt test, see 0xf3
+`ISR_EVENTS`, `VECTORS` and `ISR_BARE` only matter for the interrupt test, see 0xf3
 and 0xf7 under [Test requests](#test-requests).
 
 The result is `build/opensmi21.bin`: a plain image from address 0, padded
@@ -244,7 +246,7 @@ and decodes the reply, for example:
 | 11 | 1 | firmware version, minor (1) |
 | 12 | 2 | USB product id |
 | 14 | 2 | image size in bytes, without padding |
-| 16 | 1 | build options: bit 0 `ALT0_STOP`, bit 1 `IRQ`, bit 2 `ISR_EVENTS`, bit 3 `VECTORS=rjmp48` |
+| 16 | 1 | build options: bit 0 `ALT0_STOP`, bit 1 `IRQ`, bit 2 `ISR_EVENTS`, bit 3 `VECTORS=rjmp48`, bit 4 `ISR_BARE=1`, bit 5 `ISR_BARE=2` |
 | 17 | 1 | current mode |
 | 18 | 2 | start counter: number of starts since the counter was last found invalid (see 0xf3) |
 | 20 | 1 | last vector that hit a census stub, 0xff for none |
@@ -470,8 +472,11 @@ Version 0.1 on an EasyCAP 002, uploaded through the bootloader with
   11 that only reads the event registers and counts, the firmware stops
   answering within a few control transfers, and enumerations break off
   with `-71`. Only 0x002c is taken, about once per USB event; no other
-  slot of a 48 `RJMP` table was hit. Why it fails is open; `IRQ=0` is the
-  default.
+  slot of a 48 `RJMP` table was hit. With a bare `RETI` (`ISR_BARE=1`) or a
+  handler that reads no register of the controller (`ISR_BARE=2`), it does
+  not even get through an enumeration, so the interrupt presumably stays
+  requested until an event register is read. Why it fails with a handler
+  that reads them is open; `IRQ=0` is the default.
 - **Test requests**: all of them work. Experiments 8 to 11 gave: only the
   plain `ELPM` of the instructions tested works, program memory is 8 KB,
   the CPU clock is 30.000 MHz; see `docs/hardware.md` "Experiments".

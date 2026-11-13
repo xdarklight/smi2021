@@ -13,6 +13,8 @@
 #                              loop polls the events (interrupt test)
 #   make VECTORS=rjmp48        vector table of 48 RJMPs, for a census of
 #                              2 byte vector slots (interrupt test)
+#   make ISR_BARE=1            vector 11 is a bare RETI (interrupt test)
+#   make ISR_BARE=2            vector 11 counts but reads no register
 
 CROSS		?= avr-
 CC		:= $(CROSS)gcc
@@ -24,6 +26,7 @@ ALT0_STOP	?= 1
 IRQ		?= 0
 ISR_EVENTS	?= 1
 VECTORS		?= jmp24
+ISR_BARE	?= 0
 RJMP_TABLE	:= $(if $(filter rjmp48,$(VECTORS)),1,0)
 
 # Largest image known to work, 121 upload units of 62 bytes
@@ -38,8 +41,9 @@ ARCH		:= -mmcu=avr3
 CFLAGS		:= $(ARCH) -Os -std=gnu99 -Wall -Wextra -Werror=implicit \
 		   -ffreestanding -fno-jump-tables -fno-tree-switch-conversion \
 		   -ffunction-sections -fdata-sections -fshort-enums \
-		   -DFW_PID=$(PID) -DFW_ALT0_STOP=$(ALT0_STOP) -DFW_IRQ=$(IRQ) -DFW_ISR_EVENTS=$(ISR_EVENTS) -DFW_RJMP_TABLE=$(RJMP_TABLE) -g
-ASFLAGS		:= $(ARCH) -DFW_RJMP_TABLE=$(RJMP_TABLE) -g
+		   -DFW_PID=$(PID) -DFW_ALT0_STOP=$(ALT0_STOP) -DFW_IRQ=$(IRQ) -DFW_ISR_EVENTS=$(ISR_EVENTS) -DFW_RJMP_TABLE=$(RJMP_TABLE) \
+		   -DFW_ISR_BARE=$(ISR_BARE) -g
+ASFLAGS		:= $(ARCH) -DFW_RJMP_TABLE=$(RJMP_TABLE) -DFW_ISR_BARE=$(ISR_BARE) -g
 LDFLAGS		:= $(ARCH) -nostartfiles -nostdlib -Wl,-T,opensmi21.ld \
 		   -Wl,--gc-sections -Wl,-Map,$(B)/opensmi21.map
 

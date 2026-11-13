@@ -179,6 +179,7 @@ static void usb_check_events(void)
 
 volatile struct irq_record irqrec;
 
+#if FW_ISR_BARE != 1
 void __vector_11(void) __attribute__((signal, used, externally_visible));
 void __vector_11(void)
 {
@@ -187,6 +188,11 @@ void __vector_11(void)
 	if (irq_census[11] != 0xffff)
 		irq_census[11]++;
 	irqrec.v11++;
+#if FW_ISR_BARE == 2
+	/* interrupt test: touch no register of the controller */
+	(void)n;
+	return;
+#endif
 	if (n < IRQLOG_SIZE) {
 		irqrec.log[n][0] = USB_EVENT;
 		irqrec.log[n][1] = USB_STATUS;
@@ -198,6 +204,7 @@ void __vector_11(void)
 	usb_check_events();
 #endif
 }
+#endif
 
 /*
  * Should vector 11 keep firing, the main loop would barely run: switch
