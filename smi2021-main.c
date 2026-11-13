@@ -82,6 +82,13 @@
 #define SMI2021_REG_AUDIO_CTRL_ON	0x1d
 #define SMI2021_REG_AUDIO_CTRL_OFF	0x00
 
+/*
+ * Video engine control. The firmware sets 0x0d itself when streaming starts in
+ * capture mode; writing 0x00 stops the engine again.
+ */
+#define SMI2021_REG_VIDEO_CTRL		0x1800
+#define SMI2021_REG_VIDEO_CTRL_OFF	0x00
+
 /* 7 bit I2C address of the saa7113 compatible decoder, 4AH in its datasheet */
 #define SMI2021_DECODER_I2C_ADDR	0x25
 
@@ -578,6 +585,18 @@ void smi2021_toggle_audio(struct smi2021 *smi2021, bool enable)
 				   SMI2021_REG_AUDIO_CTRL_OFF);
 }
 
+/*
+ * Neither the standby mode nor alternate setting 0 stops the engines that the
+ * capture mode started, so clear their control registers the way the firmware
+ * does when it enters the mode.
+ */
+static void smi2021_stop_engines(struct smi2021 *smi2021)
+{
+	smi2021_write_reg(smi2021, SMI2021_REG_VIDEO_CTRL,
+			  SMI2021_REG_VIDEO_CTRL_OFF);
+	smi2021_toggle_audio(smi2021, false);
+}
+
 int smi2021_start_streaming(struct vb2_queue *vq, unsigned int count)
 {
 	struct smi2021 *smi2021 = vb2_get_drv_priv(vq);
@@ -620,6 +639,7 @@ int smi2021_start_streaming(struct vb2_queue *vq, unsigned int count)
 
 err_kill_urbs:
 	smi2021_kill_isoc(smi2021);
+	smi2021_stop_engines(smi2021);
 	usb_set_interface(smi2021->udev, smi2021->ifnum, SMI2021_ALT_IDLE);
 err_standby:
 	smi2021_set_mode(smi2021, SMI2021_MODE_STANDBY);
@@ -641,6 +661,7 @@ void smi2021_stop_streaming(struct vb2_queue *vq)
 	/* After a disconnect, this is called when the last user goes away */
 	if (smi2021->udev) {
 		v4l2_subdev_call(smi2021->decoder, video, s_stream, 0);
+		smi2021_stop_engines(smi2021);
 		smi2021_set_mode(smi2021, SMI2021_MODE_STANDBY);
 		usb_set_interface(smi2021->udev, smi2021->ifnum,
 				  SMI2021_ALT_IDLE);
