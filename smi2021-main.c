@@ -19,8 +19,6 @@
 #include <linux/string.h>
 #include <linux/unaligned.h>
 
-#include <media/i2c/saa7115.h>
-
 #include "smi2021.h"
 
 #define SMI2021_USB_VENDOR_ID		0x1c88
@@ -635,79 +633,6 @@ void smi2021_release(struct v4l2_device *v4l2_dev)
 	kfree(smi2021);
 }
 
-/*
- * All inputs of the decoder that a board may have connected. The USB product
- * id depends on the firmware that was uploaded rather than on the board, so
- * the inputs of a board can not be detected; offer all of them unless the
- * card module parameter selects a board.
- */
-static const struct smi2021_input smi2021_all_inputs[] = {
-	{ "Composite 0", SAA7115_COMPOSITE0 },
-	{ "Composite 1", SAA7115_COMPOSITE1 },
-	{ "Composite 2", SAA7115_COMPOSITE2 },
-	{ "Composite 3", SAA7115_COMPOSITE3 },
-	{ "S-Video", SAA7115_SVIDEO1 },
-};
-
-static const struct smi2021_input smi2021_dc60_inputs[] = {
-	{ "Composite", SAA7115_COMPOSITE0 },
-	{ "S-Video", SAA7115_SVIDEO1 },
-};
-
-/* Named and ordered after the labels of the connectors */
-static const struct smi2021_input smi2021_easycap002_inputs[] = {
-	{ "Video 1", SAA7115_COMPOSITE2 },
-	{ "Video 2", SAA7115_COMPOSITE3 },
-	{ "Video 3", SAA7115_COMPOSITE0 },
-	{ "Video 4", SAA7115_COMPOSITE1 },
-};
-
-/* Values of the card module parameter */
-enum smi2021_board_type {
-	SMI2021_BOARD_ALL_INPUTS,
-	SMI2021_BOARD_DC60,
-	SMI2021_BOARD_EASYCAP002,
-};
-
-static const struct smi2021_board smi2021_boards[] = {
-	[SMI2021_BOARD_ALL_INPUTS] = {
-		.name = "all inputs",
-		.inputs = smi2021_all_inputs,
-		.num_inputs = ARRAY_SIZE(smi2021_all_inputs),
-	},
-	[SMI2021_BOARD_DC60] = {
-		.name = "EasyCAP DC60",
-		.inputs = smi2021_dc60_inputs,
-		.num_inputs = ARRAY_SIZE(smi2021_dc60_inputs),
-	},
-	[SMI2021_BOARD_EASYCAP002] = {
-		.name = "EasyCAP 002",
-		.inputs = smi2021_easycap002_inputs,
-		.num_inputs = ARRAY_SIZE(smi2021_easycap002_inputs),
-	},
-};
-
-static unsigned int card[8];
-module_param_array(card, uint, NULL, 0444);
-MODULE_PARM_DESC(card,
-		 "Board of each device, by device number: 0 = all inputs (default), 1 = EasyCAP DC60, 2 = EasyCAP 002");
-
-static const struct smi2021_board *smi2021_get_board(struct smi2021 *smi2021)
-{
-	unsigned int type = SMI2021_BOARD_ALL_INPUTS;
-
-	if (smi2021->nr < ARRAY_SIZE(card))
-		type = card[smi2021->nr];
-
-	if (type >= ARRAY_SIZE(smi2021_boards)) {
-		dev_warn(smi2021->dev, "invalid card %u, offering all inputs\n",
-			 type);
-		type = SMI2021_BOARD_ALL_INPUTS;
-	}
-
-	return &smi2021_boards[type];
-}
-
 static const struct usb_device_id smi2021_usb_device_id_table[] = {
 	{ USB_DEVICE(SMI2021_USB_VENDOR_ID, SMI2021_USB_BOOTLOADER_ID) },
 	{ USB_DEVICE(SMI2021_USB_VENDOR_ID, 0x003c) },
@@ -751,7 +676,6 @@ static int smi2021_usb_probe(struct usb_interface *intf,
 	smi2021->nr = rc;
 	smi2021->dev = &intf->dev;
 	smi2021->udev = udev;
-	smi2021->board = smi2021_get_board(smi2021);
 	smi2021->ifnum = alt->desc.bInterfaceNumber;
 	smi2021->iso_ep = usb_endpoint_num(&ep->desc);
 	/* 3072 bytes, as the endpoint has two additional transactions */
