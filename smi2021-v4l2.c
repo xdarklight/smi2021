@@ -379,28 +379,29 @@ static void smi2021_copy_video(struct smi2021 *smi2021, const u8 *src,
  * codes: 0xff 0x00 0x00 followed by a word with the field and blanking flags.
  * Everything else is video data. A code may be split across two chunks.
  */
-void smi2021_parse_video(struct smi2021 *smi2021, const u8 *p,
-			 unsigned int size)
+void smi2021_parse_video(struct smi2021 *smi2021, const u8 *data,
+			 unsigned int len)
 {
 	static const u8 trc_prefix[] = { 0xff, 0x00, 0x00 };
 	unsigned int i = 0;
 
-	while (i < size) {
+	while (i < len) {
 		if (!smi2021->trc_prefix_len) {
 			/* Copy video data up to the next potential code */
-			const u8 *start = memchr(p + i, trc_prefix[0], size - i);
-			unsigned int len = start ? start - (p + i) : size - i;
+			const u8 *start = memchr(data + i, trc_prefix[0],
+						 len - i);
+			unsigned int n = start ? start - (data + i) : len - i;
 
-			smi2021_copy_video(smi2021, p + i, len);
-			i += len;
+			smi2021_copy_video(smi2021, data + i, n);
+			i += n;
 			if (start) {
 				smi2021->trc_prefix_len = 1;
 				i++;
 			}
 		} else if (smi2021->trc_prefix_len == sizeof(trc_prefix)) {
 			smi2021->trc_prefix_len = 0;
-			smi2021_parse_trc(smi2021, p[i++]);
-		} else if (p[i] == trc_prefix[smi2021->trc_prefix_len]) {
+			smi2021_parse_trc(smi2021, data[i++]);
+		} else if (data[i] == trc_prefix[smi2021->trc_prefix_len]) {
 			smi2021->trc_prefix_len++;
 			i++;
 		} else {

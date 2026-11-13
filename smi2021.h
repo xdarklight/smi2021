@@ -148,8 +148,8 @@ struct smi2021 {
 	/*
 	 * Whether the completion handler may write into the ring buffer.
 	 * Changed by the trigger callback, under the pcm stream lock that
-	 * smi2021_audio() holds as well; atomic only for the lockless read
-	 * in the trigger work.
+	 * smi2021_parse_audio() holds as well; atomic only for the lockless
+	 * read in the trigger work.
 	 */
 	atomic_t			pcm_capturing;
 	struct work_struct		pcm_trigger_work;
@@ -171,12 +171,13 @@ void smi2021_stop_streaming(struct vb2_queue *vq);
 int smi2021_vb2_setup(struct smi2021 *smi2021);
 int smi2021_video_register(struct smi2021 *smi2021);
 void smi2021_clear_queue(struct smi2021 *smi2021, enum vb2_buffer_state state);
-void smi2021_parse_video(struct smi2021 *smi2021, const u8 *p,
-			 unsigned int size);
+void smi2021_parse_video(struct smi2021 *smi2021, const u8 *data,
+			 unsigned int len);
 
 /* Provided by smi2021-audio.c */
 int smi2021_snd_register(struct smi2021 *smi2021);
 void smi2021_snd_unregister(struct smi2021 *smi2021);
-void smi2021_audio(struct smi2021 *smi2021, const u8 *data, unsigned int len);
+void smi2021_parse_audio(struct smi2021 *smi2021, const u8 *data,
+			 unsigned int len);
 
 #endif /* SMI2021_H */

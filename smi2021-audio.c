@@ -166,7 +166,7 @@ static void smi2021_pcm_advance(struct smi2021 *smi2021,
  * When bytes got lost, mark the partial frame at the head of the ring buffer
  * as complete, so that the new data starts on a frame boundary.
  */
-static bool smi2021_audio_copy(struct smi2021 *smi2021,
+static bool smi2021_copy_audio(struct smi2021 *smi2021,
 			       struct snd_pcm_runtime *runtime,
 			       const u8 *data, unsigned int len)
 {
@@ -223,7 +223,8 @@ static bool smi2021_audio_copy(struct smi2021 *smi2021,
 	return true;
 }
 
-void smi2021_audio(struct smi2021 *smi2021, const u8 *data, unsigned int len)
+void smi2021_parse_audio(struct smi2021 *smi2021, const u8 *data,
+			 unsigned int len)
 {
 	struct snd_pcm_substream *substream = smi2021->pcm_substream;
 
@@ -237,7 +238,7 @@ void smi2021_audio(struct smi2021 *smi2021, const u8 *data, unsigned int len)
 	guard(pcm_stream_lock_irqsave)(substream);
 
 	if (atomic_read(&smi2021->pcm_capturing) &&
-	    smi2021_audio_copy(smi2021, substream->runtime, data, len))
+	    smi2021_copy_audio(smi2021, substream->runtime, data, len))
 		snd_pcm_period_elapsed_under_stream_lock(substream);
 }
 

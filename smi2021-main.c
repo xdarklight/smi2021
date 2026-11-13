@@ -306,7 +306,8 @@ static void smi2021_process_packet(struct smi2021 *smi2021, const u8 *p,
 					    SMI2021_CHUNK_DATA_SIZE);
 			break;
 		case SMI2021_CHUNK_MAGIC_AUDIO:
-			smi2021_audio(smi2021, data, SMI2021_CHUNK_DATA_SIZE);
+			smi2021_parse_audio(smi2021, data,
+					    SMI2021_CHUNK_DATA_SIZE);
 			break;
 		}
 	}

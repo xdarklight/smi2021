@@ -2,7 +2,7 @@
 /*
  * Userspace test for the smi2021 audio ring buffer handling.
  *
- * smi2021_pcm_advance() and smi2021_audio_copy() are extracted verbatim from
+ * smi2021_pcm_advance() and smi2021_copy_audio() are extracted verbatim from
  * smi2021-audio.c into audio_extract.h. This file provides the few kernel
  * interfaces they use, and synthetic audio chunks to feed them.
  *
@@ -118,7 +118,7 @@ static int test_clean(unsigned int buffer, unsigned int period)
 	for (i = 0; i < chunks; i++) {
 		for (pos = 0; pos < CHUNK_DATA_SIZE; pos++)
 			chunk[pos] = stream_byte(total + pos);
-		elapsed += smi2021_audio_copy(&st.s, &st.rt, chunk,
+		elapsed += smi2021_copy_audio(&st.s, &st.rt, chunk,
 					      CHUNK_DATA_SIZE);
 		total += CHUNK_DATA_SIZE;
 	}
@@ -172,7 +172,7 @@ static int test_resync(unsigned int lost)
 			chunk[pos] = stream_byte(src + pos);
 		if (i == 11)
 			start_ptr = st.s.pcm_write_ptr;
-		smi2021_audio_copy(&st.s, &st.rt, chunk, len);
+		smi2021_copy_audio(&st.s, &st.rt, chunk, len);
 		total += CHUNK_DATA_SIZE;
 	}
 
@@ -206,7 +206,7 @@ static int test_fuzz(void)
 			for (j = 0; j < len; j++)
 				chunk[j] = rand() % 4 ? stream_byte(i * 1020 + j)
 						      : rand();
-			smi2021_audio_copy(&st.s, &st.rt, chunk, len);
+			smi2021_copy_audio(&st.s, &st.rt, chunk, len);
 			if (st.s.pcm_write_ptr >= buffer ||
 			    st.s.pcm_read_offset >= SMI2021_AUDIO_SAMPLE_SIZE ||
 			    !guards_ok(&st)) {

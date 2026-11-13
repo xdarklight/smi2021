@@ -14,7 +14,7 @@ test: test.c audio_extract.h
 	$(CC) -O2 -Wall -Wextra -Wno-unused-parameter -o $@ test.c
 
 audio_extract.h: $(DRIVER_SRC)
-	awk '/^static void smi2021_pcm_advance\(/,/^void smi2021_audio\(/' \
+	awk '/^static void smi2021_pcm_advance\(/,/^void smi2021_parse_audio\(/' \
 		$< | head -n -1 > $@
 
 clean:
