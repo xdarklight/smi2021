@@ -76,10 +76,14 @@ fi
 
 echo "$0: playing $clip on $connector" >&2
 
+# mpv converts each frame for the DRM plane in software, and by default it
+# does so with zimg, which on the Le Potato manages under 10 frames a second.
+# The capture then sees every frame two or three times, which looks like a
+# driver bug but is not. libswscale keeps up with room to spare.
 set -- --no-config --really-quiet \
 	--vo=drm --drm-connector="$connector" \
 	--loop-file="$loop" \
-	--video-unscaled=yes --sws-scaler=point \
+	--video-unscaled=yes --sws-allow-zimg=no --sws-scaler=point \
 	--framedrop=no
 [ -n "$audio" ] && set -- "$@" --audio-device="$audio"
 

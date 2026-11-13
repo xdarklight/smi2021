@@ -225,7 +225,7 @@ run_step() {
 			v4l2-ctl -d "$device" --set-standard "$want" \
 				|| fail "could not set $want"
 			v4l2-ctl -d "$device" --get-standard
-			v4l2-ctl -d "$device" --query-standard \
+			v4l2-ctl -d "$device" --get-detected-standard \
 				|| fail "querystd failed in $want"
 		done
 		;;

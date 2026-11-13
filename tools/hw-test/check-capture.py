@@ -10,7 +10,9 @@ verifies the per channel tones and looks for gaps in them.
 The counter is decoded per field on purpose. A frame handed up by the driver
 is woven from two fields that the device sent one after the other, so the two
 halves disagreeing says something a whole frame check can not: the fields were
-put together wrongly, or in the wrong order.
+put together wrongly, or in the wrong order. The second field showing a newer
+source frame than the first is the exception, as the player can flip between
+the two; see main().
 
 Copyright (C) 2026 Martin Blumenstingl <martin.blumenstingl@googlemail.com>
 """
@@ -211,39 +213,45 @@ def main():
         for field in (0, 1):
             counters, ambiguous = decode_counters(y, conf, field)
             per_field.append(counters)
-            name = f'field {field + 1}'
             if ambiguous.any():
-                print(f'  {name}: {ambiguous.sum()} frames decoded from '
-                      'blocks near the threshold, check the signal level')
+                print(f'  field {field + 1}: {ambiguous.sum()} frames decoded '
+                      'from blocks near the threshold, check the signal level')
                 failures += 1
-            missing, repeated, reordered = check_sequence(counters, modulus)
-            total = sum(n for _, n in missing)
-            print(f'  {name}: {total} frames missing in {len(missing)} gaps, '
-                  f'{len(repeated)} repeated, {len(reordered)} out of order')
-            for index, n in missing[:10]:
-                print(f'    gap of {n} before capture frame {index} '
-                      f'(counter {counters[index]})')
-            for index in repeated[:10]:
-                print(f'    repeat at capture frame {index} '
-                      f'(counter {counters[index]})')
-            for index, back in reordered[:10]:
-                print(f'    went back {abs(back)} at capture frame {index}')
-            failures += len(missing) + len(repeated) + len(reordered)
 
-        # The source advances at most one frame between the two fields of a
-        # captured frame. More than that means the fields were not woven from
-        # the pair the device sent.
+        # Field 1 is sent first, so it carries the sequence of frames.
+        missing, repeated, reordered = check_sequence(per_field[0], modulus)
+        total = sum(n for _, n in missing)
+        print(f'  frames: {total} missing in {len(missing)} gaps, '
+              f'{len(repeated)} repeated, {len(reordered)} out of order')
+        for index, n in missing[:10]:
+            print(f'    gap of {n} before capture frame {index} '
+                  f'(counter {per_field[0][index]})')
+        for index in repeated[:10]:
+            print(f'    repeat at capture frame {index} '
+                  f'(counter {per_field[0][index]})')
+        for index, back in reordered[:10]:
+            print(f'    went back {abs(back)} at capture frame {index}')
+        failures += len(missing) + len(repeated) + len(reordered)
+
+        # Field 2 is sent after field 1, so it can show the same source
+        # frame or a newer one. Newer happens when the player's page flip
+        # lands on the vblank between the two fields, which an interlaced
+        # mode has once per field: a property of the test signal. An older
+        # field 2, or one further away, can only come from fields woven
+        # from the wrong pair or in the wrong order.
         skew = (per_field[1] - per_field[0]) % modulus
-        bad = np.where((skew != 0) & (skew != 1) & (skew != modulus - 1))[0]
-        print(f'  field pairing: {len(bad)} frames woven from fields more '
-              'than one source frame apart')
+        flipped = np.where(skew == 1)[0]
+        bad = np.where((skew != 0) & (skew != 1))[0]
+        print(f'  field pairing: {len(bad)} frames woven from the wrong '
+              'fields')
         for index in bad[:10]:
             print(f'    frame {index}: field 1 counter {per_field[0][index]}, '
                   f'field 2 counter {per_field[1][index]}')
         failures += len(bad)
-        if len(bad) == 0 and np.all(skew == modulus - 1):
-            print('    note: field 2 is consistently one frame behind '
-                  'field 1, which looks like inverted field order')
+        if len(flipped):
+            print(f'    note: in {len(flipped)} frames the source moved on '
+                  'between the two fields; that is the player flipping on a '
+                  'field vblank, not the capture')
 
     if args.audio:
         raw = np.fromfile(args.audio, dtype='<i4')

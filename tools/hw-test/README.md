@@ -57,6 +57,15 @@ the kernel command line; `./play-signal.sh --list` shows what the kernel
 settled on, and the connector is named `Composite-1` on some kernels and
 `CVBS-1` on others.
 
+The analog output of the board is the internal ACODEC behind the AIU, and
+it needs `AIU ACODEC OUT EN` on, `AIU ACODEC SRC` set to `I2S`, a volume
+above 0, and `AIU ACODEC I2S Lane Select` at 0. A stereo stream is on the
+first I2S lane, so any other lane plays silence; a capture then shows only
+a 25 Hz hum, which is the video crosstalking into an audio input with
+nothing on it.
+
+    amixer -c 0 sset 'AIU ACODEC I2S Lane Select' 0
+
 ### Getting an oops back without a console
 
 With the serial console on a machine the test runner can not read,
@@ -120,6 +129,16 @@ decoding it needs a luma threshold instead of OCR and survives a soft analog
 picture. It is decoded separately for each interlaced field, which catches
 fields woven from the wrong pair or in the wrong order -- something a whole
 frame comparison cannot see.
+
+The frame sequence is judged on the first field. The second one may show the
+next source frame instead of the same one: the vblank of an interlaced mode
+comes once per field, so the player's page flip can land between the two.
+That is reported as a note. A second field showing an older frame cannot
+come from the source and is a failure.
+
+`play-signal.sh` turns off zimg for mpv's software conversion. With it, mpv
+manages under 10 frames a second on this board, and a capture of that shows
+every frame two or three times, which is easy to mistake for a driver bug.
 
 The two channels carry different tones. On a board with stereo input that
 shows up a swap of left and right; on this one it identifies which channel
