@@ -434,7 +434,9 @@ start audio and 0x00 to stop it.
 
 ### Inputs
 
-The decoder's four analog inputs are wired as follows (reported):
+The decoder's four analog inputs are wired as follows (reported). The
+EasyCAP 002 column is confirmed on hardware: with a signal on each
+connector in turn, only the decoder mode in its row saw it (observed).
 
 | Decoder mode | Pins | EasyCAP 002 | EasyCAP DC60 |
 |--------------|------|-------------|--------------|
