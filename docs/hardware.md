@@ -102,24 +102,45 @@ guarded by a 0xaa byte, and helper functions that save and restore
 Instruction set: the images use `JMP` and `CALL`, and `LPM` only in its
 original form that loads `r0`. They contain no `MUL`, `MOVW`, `LPM Rd, Z`,
 `ELPM`, `SPM`, `SLEEP` or `WDR`. That the compiler did without `MUL` and
-`MOVW` fits the ATmega103, which doesn't have them. Until a test firmware
-has shown otherwise (see [Experiments](#experiments)), a replacement should
-be built for the classic core with `JMP` and `CALL`, `-mmcu=avr3` with
-avr-gcc, using the register names of the ATmega103 plus `DDRC` and `PINC`.
-`-mmcu=atmega103` would reproduce the original memory layout, but assumes
-`ELPM`, which avr-libc's startup code then uses to copy initialized data;
-whether the core has `ELPM` is not known.
+`MOVW` fits the ATmega103, which doesn't have them.
+
+A test firmware ran each of these instructions once on an EasyCAP 002
+(observed, see [Experiments](#experiments)). The core decodes the
+instruction set of the ATmega103 and nothing more:
+
+| Instruction | Result |
+|-------------|--------|
+| `MUL` | does nothing: registers and flags unchanged |
+| `MOVW` | does nothing |
+| `LPM Rd, Z`, `LPM Rd, Z+` | do nothing |
+| `ELPM` (into `r0`) | works |
+| `ELPM Rd, Z`, `ELPM Rd, Z+` | do nothing |
+
+None of them crashed the core; an instruction it lacks acts as a `NOP`.
+`SPM` was not tried. `RAMPZ` exists, but as program memory repeats every
+8 KB (see [Program memory](#program-memory)), `ELPM` reads the same bytes
+whatever it holds. A replacement can therefore be built for the
+ATmega103, `-mmcu=atmega103` with avr-gcc and avr-libc, whose startup code
+copies initialized data with `ELPM`, using the register names of the
+ATmega103 plus `DDRC` and `PINC`; or for the classic core with `JMP` and
+`CALL`, `-mmcu=avr3`.
 
 ### Program memory
 
 The bootloader writes the uploaded image to program memory from address 0
 and starts it there, see [Bootloader](protocol.md#bootloader). Program
-memory holds at least the 0x1d4e bytes of `smi2021_3c.bin`, and presumably
-the 7812 bytes of the image of 2013 (see [Differences between the
-images](protocol.md#differences-between-the-images)); its actual size
-is unknown. Where the bootloader itself lives is unknown too: it is in ROM
-(inferred, as the device keeps no firmware), but whether that ROM is
-visible in program memory or data space is not known.
+memory is 8 KB (observed, on an EasyCAP 002): read with `LPM` from 0 to
+0xffff, it repeats every 0x2000 bytes, the uploaded image at 0 and at every
+repeat. After a power-up, the part beyond the uploaded image holds what
+looks like random data, nothing of an image uploaded before the power
+cycle, so program memory is presumably RAM that the bootloader fills on
+every upload (inferred). An image can be up to 8192 bytes; the image of
+2013, with 7812 bytes (see [Differences between the
+images](protocol.md#differences-between-the-images)), fits. The bootloader
+appears nowhere in program memory, so it runs from a ROM of its own that
+the CPU doesn't see there once the image runs (inferred); whether it is
+visible in the data space is not known, and searching it costs a power
+cycle per gap, see [Data space](#data-space).
 
 The image starts with the interrupt vector table, one `JMP` of 4 bytes per
 vector. Both images leave 0x0000–0x005f to the table, which is room for
@@ -134,6 +155,17 @@ On an ATmega103, vector 11 is the input capture interrupt of Timer1
 (`TIMER1_CAPT`). Whether Somagic replaced that interrupt with the USB
 controller's, or numbers the interrupts differently, is unknown. All other
 entries are 0xffff.
+
+A test firmware with a counting handler on each of the 48 words of
+0x0000–0x005f, so that it would catch vectors 2 bytes apart as well as 4,
+saw only 0x002c taken, about once per USB event during an enumeration
+(observed, on an EasyCAP 002). Whether the other vectors exist is not known:
+their sources may just never have been enabled. With interrupts enabled,
+the test firmware stopped working within a few control transfers, even
+with a handler that only read the event registers and counted, while the
+same firmware polling the controller worked (observed). Why is not known.
+The original firmware enables interrupts but polls too, see
+[Interrupt](#interrupt).
 
 After the vector table, both images place the initial values of their
 SRAM variables, from 0x0060 to 0x019b (`3c`) or 0x0197 (`3f`), which the
@@ -175,7 +207,9 @@ host, counts at 29.3 kHz with clock select 7 and 117 kHz with clock select
 6, and, with the aliasing of a counter that wraps between samples
 accounted for, at 232, 467 and 939 kHz with clock selects 5, 4 and 3: the
 ATmega103's prescaler at a CPU clock of 30.0 MHz (observed, on an EasyCAP
-002). This document uses 30 MHz where it converts cycles to time.
+002). A loop of a known number of cycles in a test firmware, timed by the
+host, gives 30.000 MHz (observed). This document uses 30 MHz where it
+converts cycles to time.
 
 The EasyCAP 002 has two crystals, one marked 24.576 and one without a
 marking; how they are connected was not traced (reported). 24.576 MHz is
@@ -281,8 +315,8 @@ sequence.
       again with the firmware's descriptors (inferred). A unit of the
       delay loop takes about 160 CPU cycles, so at 30 MHz the device
       disconnects after about 1.1 ms, for about 11 ms (inferred).
-6. Enable interrupts, and loop forever, handling the USB events that the
-   interrupt handler records, see [Interrupt](#interrupt).
+6. Enable interrupts, and loop forever: call the event handler, then
+   handle the USB events it recorded, see [Interrupt](#interrupt).
 
 The firmware never writes the device address register on its own, see
 [Device state](#device-state).
@@ -300,7 +334,7 @@ streaming engines; the firmware never touches it.
 |---------|-----|
 | 0x1500 | bit 3: disconnect from the bus while set (inferred); bit 2: set on suspend |
 | 0x1501 | bit 1: set when the device runs at high speed |
-| 0x1502 | bit 4: a setup packet was received; the firmware clears it in the interrupt handler |
+| 0x1502 | bit 4: a setup packet was received; the firmware clears it in the event handler |
 | 0x1503 | event code, see [Interrupt](#interrupt) |
 | 0x1504 | device address |
 | 0x1507 | written 0xc4 at start (meaning unknown; maybe the enable mask of the interrupt) |
@@ -310,14 +344,21 @@ streaming engines; the firmware never touches it.
 | 0x1530–0x153f | endpoint block B |
 | 0x1540–0x154f | endpoint block C, only used by `smi2021_3c.bin` |
 
-The firmware never reads 0x1503 more than once per interrupt, and never
-acknowledges an event by writing to it, so reading it presumably
-acknowledges the event (inferred).
+Reading 0x1503 does not acknowledge an event: the event handler reads it
+up to four times in a row, once for each code it compares, and the later
+comparisons could never match if the first read had cleared it. Nothing
+writes it either. So it presumably holds the code of the last event until
+the next one (inferred); a setup packet is told apart from a stale code by
+0x1502 bit 4, which the handler clears.
 
 ### Interrupt
 
-The controller raises vector 11. The handler reads the event code from
-0x1503, records the event for the main loop and returns:
+Vector 11 goes to the event handler, and the main loop also calls the
+same handler at the start of every pass, so both images poll the
+controller and work whether the interrupt fires or not. A replacement
+should poll as well: whether the controller raises vector 11 at all is
+not known. The handler reads the event code from 0x1503, records the event
+for the main loop and returns:
 
 | Code | Event | What the firmware does |
 |------|-------|-------------------------|
@@ -326,7 +367,10 @@ The controller raises vector 11. The handler reads the event code from
 | 0x81 | bus reset | resets its own state only: device state default, control endpoint idle, endpoints halted in its bookkeeping |
 | 0x85 | suspend | drives `PC0` low (and makes `PC2` an output in `3f`), sets bit 4 of 0x3080 and bit 2 of 0x1500 |
 
-Code 0x01 without bit 4 of 0x1502 is ignored, as are all other codes.
+Code 0x01 without bit 4 of 0x1502 is ignored, as are all other codes. As
+the code stays, every pass of the main loop records the last bus reset,
+speed detection or suspend again until another event arrives, and the
+firmware handles it again; that is harmless for these three.
 Nothing handles a resume, and nothing ever clears the bits set on suspend,
 so presumably the hardware clears them by itself on resume (inferred).
 
@@ -683,9 +727,8 @@ them. The first group works with the original firmware, through register
 access requests from the host; the second one needs a test firmware
 uploaded through the bootloader. The first group is implemented by
 [`tools/bridge-probe`](../tools/bridge-probe/README.md). Reading a register
-can have side effects, for instance 0x1503 presumably acknowledges an
-event, so the registers of the USB controller should be left out of blind
-surveys.
+can have side effects, so the registers of the USB controller should be
+left out of blind surveys.
 
 Experiments 1 to 6 ran on an EasyCAP 002 with `smi2021_3c.bin` in November
 2026; the results are in the sections named after each item.
@@ -729,16 +772,25 @@ With the original firmware:
 7. **GPIO**: find what `PA7`, `PC0`, `PC1`, `PC2` and `PC4` are connected
    to. Needs someone at the board with a multimeter; not done yet.
 
-With a test firmware:
+With a test firmware, [`fw/`](../fw/README.md), on an EasyCAP 002 in
+November 2026:
 
 8. Check whether the core executes `MUL`, `MOVW`, `LPM Rd, Z`, `ELPM` and
-   `SPM`.
+   `SPM`. **Done** except for `SPM`: only the plain `ELPM` works, see [CPU
+   core](#cpu-core).
 9. Read program memory beyond the uploaded image to find its size and the
-   bootloader.
+   bootloader. **Done**: 8 KB, and the bootloader is not in it, see
+   [Program memory](#program-memory).
 10. Install handlers on all vectors to find which interrupts exist, and
-    check whether the USB interrupt is really vector 11 only.
+    check whether the USB interrupt is really vector 11 only. **Done** as
+    far as it goes: only 0x002c is taken, see [Program
+    memory](#program-memory). Why enabling the interrupt makes the test
+    firmware fail is open.
 11. Measure the CPU clock with a loop of known length against the USB
-    frame timing or a GPIO toggled into a scope.
+    frame timing or a GPIO toggled into a scope. **Done**: a loop of 5 × 10⁷
+    cycles took 1333.29 ms longer than one of 10⁷, timed by the host
+    through the request it ran in, so 4 × 10⁷ cycles take 1333.29 ms, a CPU
+    clock of 30.000 MHz, see [Clock](#clock).
 
 ## Sources
 
