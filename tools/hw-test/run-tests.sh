@@ -106,6 +106,15 @@ harvest_pstore() {
 	echo "clear it with: rm /sys/fs/pstore/*"
 }
 
+# insmod does not load what the module depends on, and after a reboot nothing
+# else may have loaded videobuf2-vmalloc, for one
+load_module() {
+	for dep in $(modinfo -F depends "$module" | tr , ' '); do
+		modprobe "$dep" || { fail "could not load $dep"; return 1; }
+	done
+	insmod "$module" "card=$card" || { fail 'insmod failed'; return 1; }
+}
+
 video_device() {
 	for sysdev in /sys/class/video4linux/video*; do
 		[ -r "$sysdev/name" ] || continue
@@ -157,6 +166,9 @@ capture_video() {
 	device=$(video_device) || { fail "no smi2021 video device"; return 1; }
 	out=$results/$1.uyvy
 	v4l2-ctl -d "$device" --set-standard "$std" >/dev/null 2>&1 || :
+	v4l2-ctl -d "$device" --set-input "$connected" >/dev/null 2>&1 || :
+	# Frames from before the decoder locked onto the input are garbage
+	sleep 1
 	timeout $((duration + 20)) v4l2-ctl -d "$device" \
 		--stream-mmap --stream-count="$2" --stream-to="$out" \
 		>/dev/null || { fail "$1: capture failed"; return 1; }
@@ -191,13 +203,12 @@ run_step() {
 		! grep -q '^smi2021 ' /proc/modules || rmmod smi2021 ||
 			fail 'could not unload the module that was loaded'
 		modprobe saa7115 || fail 'saa7115 missing, CONFIG_VIDEO_SAA711X'
-		insmod "$module" "card=$card" || fail 'insmod failed'
-		rmmod smi2021 || fail 'rmmod failed'
+		load_module && { rmmod smi2021 || fail 'rmmod failed'; }
 		;;
 	enumerate)
 		say 'firmware upload and re-enumeration'
 		echo 'before:'; lsusb -d 1c88: || echo '  no 1c88 device'
-		insmod "$module" "card=$card" || fail 'insmod failed'
+		load_module
 		sleep 5
 		echo 'after:'; lsusb -d 1c88: || fail 'device did not re-enumerate'
 		;;
