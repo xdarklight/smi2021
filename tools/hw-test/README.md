@@ -27,12 +27,10 @@ Video 1 to Video 4, and a single audio connector. The driver identifies it
 by itself, and `SMI2021_INPUT` says which of the four connectors the cable
 is in, counted from zero.
 
-`SMI2021_FIRMWARE` picks the firmware the driver uploads, by the USB product
-id it gives the device: 0x3c, the default, or 0x3f. The device keeps a
-firmware until it loses power, so replug it before switching, and the
-firmware upload step fails if the device still runs another one:
-
-    SMI2021_FIRMWARE=0x3f ./run-tests.sh
+The driver uploads OpenSMI21, `smi2021/opensmi21.bin` in the firmware
+directory, see `../../fw/README.md`. The device keeps a firmware until it
+loses power, so the firmware upload step fails if the device still runs
+another one; replug it then.
 
 Because there is one audio connector and the CS5340 is a stereo ADC, the
 two channels of the ALSA device cannot be independent. Whether the one input

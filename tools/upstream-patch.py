@@ -47,7 +47,9 @@ video decoder, a GM7113C on most devices, is attached to the i2c engine,
 and a CS5340 audio ADC to the audio engine.
 
 The devices enumerate as 1c88:0007 until the firmware has been uploaded,
-and then as 1c88:003c to 1c88:003f, depending on the firmware. Video and
+and then as 1c88:003c to 1c88:003f, depending on the firmware. The
+driver uploads OpenSMI21, an open source firmware that implements the
+protocol of the vendor's 0x3c firmware, from smi2021/opensmi21.bin. Video and
 audio data arrive interleaved on one high bandwidth isochronous
 endpoint, in chunks of 1024 bytes that each start with a magic word. The
 video data is the ITU-R BT.656 output of the decoder, from which the
@@ -64,8 +66,8 @@ inputs on a board it doesn't know.
 This is based on the out of tree driver by Jon Arne Jørgensen, which was
 submitted as an RFC in 2013, reworked for the current kernel APIs, with
 the issues raised in the review of that submission addressed. The
-register protocol was verified against the firmware that the driver
-uploads.
+register protocol was verified against the vendor's firmware and
+OpenSMI21.
 
 Link: https://lore.kernel.org/all/1378064571-10537-1-git-send-email-jonarne@jonarne.no/
 Assisted-by: Claude:claude-opus-5-5

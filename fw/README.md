@@ -87,9 +87,10 @@ binutils 2.47 and avr-libc 2.3.2 (Arch Linux), to 5552 bytes, 5580 padded
 default build enumerates, answers the identity, runs 2000 rounds of
 `soak` without a restart and times 30 MHz.
 
-To use it with the Linux driver, install it in place of the vendor image:
+The Linux driver uploads it from `smi2021/opensmi21.bin` in the firmware
+directory, the name it would have in linux-firmware:
 
-    cp build/opensmi21.bin /lib/firmware/smi2021_3c.bin
+    install -D -m 644 build/opensmi21.bin /lib/firmware/smi2021/opensmi21.bin
 
 or upload it by hand to a device in bootloader mode, with the driver
 unloaded:

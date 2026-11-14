@@ -92,13 +92,20 @@ follows the current kernel APIs, so older kernels may lack some of them.
 ## Firmware
 
 These devices have no on-board flash. They enumerate as `1c88:0007` and need
-a firmware upload before the capture device appears. By default the driver
-uploads `/lib/firmware/smi2021_3c.bin`. The `firmware_version` module
-parameter selects `smi2021_3e.bin` or `smi2021_3f.bin` instead:
+a firmware upload before the capture device appears. The driver uploads
+OpenSMI21, the open source firmware in [`fw/`](fw/README.md), from
+`smi2021/opensmi21.bin` in the firmware directory, the name proposed for it
+in linux-firmware. It implements the protocol of the vendor's firmware that
+enumerates as `1c88:003c`, on every board. Build and install it with:
 
 ```bash
-modprobe smi2021 firmware_version=0x3f
+make -C fw
+install -D -m 644 fw/build/opensmi21.bin /lib/firmware/smi2021/opensmi21.bin
 ```
+
+The vendor's firmware images are not needed. They can still be uploaded by
+hand, see [`tools/bridge-probe`](tools/bridge-probe/README.md); the driver
+then binds to the device as well.
 
 ## Upstream submission
 
@@ -136,8 +143,11 @@ do:
   cases that cannot be covered without a device.
 - Run sparse, which needs a version built from git, as the kernel requires
   `__typeof_unqual__` support that no sparse release has yet.
-- Get the firmware blobs into `linux-firmware`. Their redistribution licence
-  is not clearly established, which is the main open blocker.
+- Get OpenSMI21 into `linux-firmware` as `smi2021/opensmi21.bin`, with a
+  `WHENCE` entry that gives its licence, GPL-2.0-or-later, and where its
+  source is, as for the open firmware of `ath9k_htc` and `carl9170`. The
+  vendor's blobs, whose redistribution licence was never established, are
+  no longer needed.
 
 ## Testing on hardware
 

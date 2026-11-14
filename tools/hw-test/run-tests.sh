@@ -28,10 +28,6 @@ python=${SMI2021_PYTHON:-python3}
 # Which of those connectors the composite cable is actually in, counted from
 # 0, so that the input sweep knows which one should see a signal.
 connected=${SMI2021_INPUT:-0}
-# Firmware for the driver to upload, named by the USB product id it gives the
-# device. The device keeps the one it has until it loses power, so a device
-# that runs another one has to be replugged first.
-firmware=${SMI2021_FIRMWARE:-0x3c}
 
 attended=0
 from=1
@@ -55,7 +51,7 @@ usage: $0 [--from N] [--only N] [--risky] [--list]
 
 Environment: SMI2021_RESULTS, SMI2021_CAPTURES, SMI2021_MODULE,
 SMI2021_STD (ntsc|pal), SMI2021_DURATION, SMI2021_INPUT,
-SMI2021_FIRMWARE, SMI2021_CONNECTOR, SMI2021_AUDIO_OUT, SMI2021_PYTHON
+SMI2021_CONNECTOR, SMI2021_AUDIO_OUT, SMI2021_PYTHON
 EOF
 	exit "${1:-0}"
 }
@@ -118,7 +114,7 @@ load_module() {
 	for dep in $(modinfo -F depends "$module" | tr , ' '); do
 		modprobe "$dep" || { fail "could not load $dep"; return 1; }
 	done
-	insmod "$module" "firmware_version=$firmware" ||
+	insmod "$module" ||
 		{ fail 'insmod failed'; return 1; }
 }
 
@@ -223,9 +219,9 @@ run_step() {
 		load_module
 		sleep 5
 		echo 'after:'; lsusb -d 1c88: || fail 'device did not re-enumerate'
-		pid=$(printf '%04x' "$firmware")
-		lsusb -d "1c88:$pid" >/dev/null ||
-			fail "device does not run firmware $firmware, replug it"
+		# OpenSMI21 enumerates as the vendor firmware 0x3c does
+		lsusb -d 1c88:003c >/dev/null ||
+			fail 'device does not run OpenSMI21, replug it'
 		;;
 	probe)
 		say 'what probe registered'
