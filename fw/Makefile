@@ -30,7 +30,7 @@ OBJS		:= $(addprefix $(B)/,$(SRCS_S:.S=.o) $(SRCS_C:.c=.o))
 # avr-libc's ATmega103: its startup code, headers and delay loops
 ARCH		:= -mmcu=atmega103
 CFLAGS		:= $(ARCH) -Os -std=gnu99 -Wall -Wextra -Werror=implicit \
-		   -ffreestanding -fno-jump-tables -fno-tree-switch-conversion \
+		   -fno-jump-tables -fno-tree-switch-conversion \
 		   -ffunction-sections -fdata-sections -fshort-enums \
 		   -DFW_PID=$(PID) -DFW_ALT0_STOP=$(ALT0_STOP) -DFW_IRQ=$(IRQ) \
 		   -DF_CPU=30000000UL -g

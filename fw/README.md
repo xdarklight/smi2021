@@ -63,10 +63,10 @@ with 0xff to a multiple of 62 bytes, as the bootloader takes it. The build
 fails if the image grows beyond 7502 bytes, the largest image known to
 work, though program memory is 8 KB. `make` also runs `check.sh`, see
 [Checks](#checks). Built with avr-gcc 7.3.0 and the defaults, version 0.1
-is 3404 bytes, 3410 padded (55 upload units); with `IRQ=1`, 3786 bytes,
-3844 padded (62 upload units). It also builds with avr-gcc 16.2.0,
-binutils 2.47 and avr-libc 2.3.2 (Arch Linux), to 3236 bytes, 3286 padded
-(53 upload units), and 3620 bytes with `IRQ=1`.
+is 3378 bytes, 3410 padded (55 upload units); with `IRQ=1`, 3760 bytes,
+3782 padded (61 upload units). It also builds with avr-gcc 16.2.0,
+binutils 2.47 and avr-libc 2.3.2 (Arch Linux), to 3272 bytes, 3286 padded
+(53 upload units), and 3656 bytes with `IRQ=1`.
 
 The Linux driver uploads it from `smi2021/opensmi21.bin` in the firmware
 directory, the name it would have in linux-firmware:
@@ -100,17 +100,17 @@ unloaded:
   `.data` copied with the plain `ELPM`, `.bss` cleared, then `main()`.
   SRAM 0x0060–0x0fff; the linker script is the firmware's own, for the
   info block at 0x0060 and the limits. Only vector 11 is ever taken; the
-  others return at once. The descriptors are in program memory, as
-  `__flash` data, which avr-gcc reads with the plain `LPM`.
+  others return at once. The descriptors are constants in program memory,
+  copied with avr-libc's `memcpy_P()`, which uses the plain `LPM`; the
+  string descriptors are wide string literals, which are UTF-16LE on AVR,
+  as USB wants them.
 - **Bring-up**: the sequence of `docs/hardware.md` "Startup": `DDRA` = 0xff,
   status of both i2c engines 0, mode 3 prepared (0x1580 = 0x03, 0x1880 = 0),
   the USB controller set up with the documented values, `PC0` driven low,
   and the soft disconnect: 200 units of the original's delay loop of about
   160 cycles, 0x1500 bit 3 set, 2000 units, bit 3 cleared, waited out with
-  avr-libc's `_delay_us()` as 1067 and 10667 µs. As the firmware is built
-  with `-ffreestanding`, avr-libc takes its older loops for that instead of
-  `__builtin_avr_delay_cycles()`: 32008 and about 319400 cycles, as good
-  for a wait of which only the order of magnitude matters.
+  avr-libc's `_delay_us()` as 1067 and 10667 µs, some 32000 and 320000
+  cycles; only the order of magnitude matters.
 - **USB events**: polled, as the original firmware does: the main loop and
   every wait of the control endpoint read 0x1503, which reading doesn't
   acknowledge, and record the event; the main loop handles it. With

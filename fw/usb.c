@@ -11,6 +11,8 @@
  * control transfer gives up when a new setup packet or a bus reset arrives.
  */
 
+#include <stddef.h>
+#include <avr/pgmspace.h>
 #include <util/delay.h>
 
 #include "fw.h"
@@ -57,7 +59,7 @@ static uint8_t ep82_halted;
 #define LE16(x)		((x) & 0xff), ((x) >> 8)
 #define BCD_DEVICE	((FW_VERSION_MAJOR << 8) | FW_VERSION_MINOR)
 
-static const __flash uint8_t dev_desc[18] = {
+static const uint8_t dev_desc[18] PROGMEM = {
 	18, DT_DEVICE,
 	LE16(0x0200),		/* bcdUSB */
 	0x00, 0x00, 0x00,	/* class in the interface descriptor */
@@ -69,7 +71,7 @@ static const __flash uint8_t dev_desc[18] = {
 	1,			/* bNumConfigurations */
 };
 
-static const __flash uint8_t qual_desc[10] = {
+static const uint8_t qual_desc[10] PROGMEM = {
 	10, DT_QUALIFIER,
 	LE16(0x0200),
 	0x00, 0x00, 0x00,
@@ -95,7 +97,7 @@ static const __flash uint8_t qual_desc[10] = {
 	7, 5, STREAM_EP, 0x01, LE16(mps), 1
 
 /* High speed: 1023 bytes and 3 x 1024 bytes per microframe */
-static const __flash uint8_t cfg_hs[CFG_LEN] = {
+static const uint8_t cfg_hs[CFG_LEN] PROGMEM = {
 	CONFIG_HEAD,
 	INTERFACE(0, 0),
 	INTERFACE(1, 1),
@@ -105,7 +107,7 @@ static const __flash uint8_t cfg_hs[CFG_LEN] = {
 };
 
 /* Full speed: 1023 bytes per frame for both alternate settings */
-static const __flash uint8_t cfg_fs[CFG_LEN] = {
+static const uint8_t cfg_fs[CFG_LEN] PROGMEM = {
 	CONFIG_HEAD,
 	INTERFACE(0, 0),
 	INTERFACE(1, 1),
@@ -114,9 +116,22 @@ static const __flash uint8_t cfg_fs[CFG_LEN] = {
 	ISO_IN_EP(0x03ff),
 };
 
-static const __flash char str_manufacturer[] = "OpenSMI21";
-static const __flash char str_product[] = "SMI2021 open source firmware";
-static const __flash char str_serial[] = "OPENSMI21-" FW_VERSION_STR;
+/*
+ * A string descriptor from a wide string literal, which is UTF-16LE on AVR,
+ * whose wchar_t has 16 bits. sizeof() counts its NUL, two bytes, as many as
+ * the header has, so it is bLength; the NUL is not sent.
+ */
+_Static_assert(sizeof(wchar_t) == 2, "wchar_t must be UTF-16");
+#define USB_STRING(name, s)						\
+	static const struct {						\
+		uint8_t bLength;					\
+		uint8_t bDescriptorType;				\
+		wchar_t str[sizeof(s) / sizeof(wchar_t)];		\
+	} name PROGMEM = { sizeof(s), DT_STRING, s }
+
+USB_STRING(str_manufacturer, L"OpenSMI21");
+USB_STRING(str_product, L"SMI2021 open source firmware");
+USB_STRING(str_serial, L"OPENSMI21-" FW_VERSION_STR);
 
 /* -- events --------------------------------------------------------------- */
 
@@ -295,29 +310,6 @@ static void ep0_send(uint16_t len, uint16_t wlength)
 		ep0_tx(p, 0);
 }
 
-static void copy_flash(const __flash uint8_t *src, uint8_t n)
-{
-	uint8_t i;
-
-	for (i = 0; i < n; i++)
-		xbuf[i] = src[i];
-}
-
-static uint8_t string_desc(const __flash char *s)
-{
-	uint8_t n = 2;
-	uint8_t c;
-
-	while ((c = *s++) != 0) {
-		xbuf[n++] = c;
-		xbuf[n++] = 0;
-	}
-	xbuf[0] = n;
-	xbuf[1] = DT_STRING;
-
-	return n;
-}
-
 /* -- endpoint register blocks --------------------------------------------- */
 
 static void block_set_state(uint16_t base, uint8_t state)
@@ -349,14 +341,15 @@ static uint8_t get_descriptor(const struct setup *s, uint16_t *len)
 	uint8_t type = s->wValue >> 8;
 	uint8_t index = s->wValue & 0xff;
 	uint8_t hs = USB_SPEED & USB_SPEED_HIGH;
+	PGM_VOID_P str;
 
 	switch (type) {
 	case DT_DEVICE:
-		copy_flash(dev_desc, sizeof(dev_desc));
+		memcpy_P(xbuf, dev_desc, sizeof(dev_desc));
 		*len = sizeof(dev_desc);
 		return 0;
 	case DT_QUALIFIER:
-		copy_flash(qual_desc, sizeof(qual_desc));
+		memcpy_P(xbuf, qual_desc, sizeof(qual_desc));
 		*len = sizeof(qual_desc);
 		return 0;
 	case DT_CONFIG:
@@ -365,7 +358,7 @@ static uint8_t get_descriptor(const struct setup *s, uint16_t *len)
 			return 1;
 		if (type == DT_OTHER_SPEED)
 			hs = !hs;
-		copy_flash(hs ? cfg_hs : cfg_fs, CFG_LEN);
+		memcpy_P(xbuf, hs ? cfg_hs : cfg_fs, CFG_LEN);
 		xbuf[1] = type;
 		*len = CFG_LEN;
 		return 0;
@@ -379,16 +372,21 @@ static uint8_t get_descriptor(const struct setup *s, uint16_t *len)
 			*len = 4;
 			return 0;
 		case 1:
-			*len = string_desc(str_manufacturer);
-			return 0;
+			str = &str_manufacturer;
+			break;
 		case 2:
-			*len = string_desc(str_product);
-			return 0;
+			str = &str_product;
+			break;
 		case 3:
-			*len = string_desc(str_serial);
-			return 0;
+			str = &str_serial;
+			break;
+		default:
+			return 1;
 		}
-		return 1;
+		/* its length is its first byte */
+		*len = pgm_read_byte(str);
+		memcpy_P(xbuf, str, *len);
+		return 0;
 	}
 
 	return 1;
