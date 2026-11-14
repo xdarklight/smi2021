@@ -13,6 +13,7 @@
 #include <linux/bits.h>
 #include <linux/build_bug.h>
 #include <linux/cleanup.h>
+#include <linux/delay.h>
 #include <linux/idr.h>
 #include <linux/module.h>
 #include <linux/slab.h>
@@ -272,22 +273,27 @@ static const struct i2c_algorithm smi2021_i2c_algo = {
 static int smi2021_initialize(struct smi2021 *smi2021)
 {
 	/*
-	 * Set the GPIO lines as the vendor driver does. On an EasyCAP 002, PA7
-	 * high holds the video decoder and the audio ADC in reset, so this
-	 * pulses their reset; where PC0 and PC4 go is not known.
+	 * Set the GPIO lines as the vendor driver does, with its delays. On an
+	 * EasyCAP 002, PA7 high holds the video decoder and the audio ADC in
+	 * reset, so this pulses their reset for 100 ms and gives the decoder
+	 * 10 ms to come out of it before the first i2c access. Neither
+	 * datasheet gives the time they need; it is presumably much shorter,
+	 * but this is the timing the boards were made for. Where PC0 and PC4
+	 * go is not known.
 	 */
 	static const struct {
 		u16 reg;
 		u8 val;
+		unsigned int delay_us;
 	} init[] = {
 		{ SMI2021_REG_DDRA, BIT(7) },
 		{ SMI2021_REG_PORTA, 0 },
 		{ SMI2021_REG_DDRC, BIT(0) },
 		{ SMI2021_REG_PORTC, 0 },
 		{ SMI2021_REG_DDRC, BIT(4) | BIT(0) },
-		{ SMI2021_REG_PORTC, BIT(4) | BIT(0) },
-		{ SMI2021_REG_PORTA, BIT(7) },
-		{ SMI2021_REG_PORTA, 0 },
+		{ SMI2021_REG_PORTC, BIT(4) | BIT(0), 10 * USEC_PER_MSEC },
+		{ SMI2021_REG_PORTA, BIT(7), 100 * USEC_PER_MSEC },
+		{ SMI2021_REG_PORTA, 0, 10 * USEC_PER_MSEC },
 	};
 	unsigned int i;
 	int rc;
@@ -296,6 +302,8 @@ static int smi2021_initialize(struct smi2021 *smi2021)
 		rc = smi2021_write_reg(smi2021, init[i].reg, init[i].val);
 		if (rc)
 			return rc;
+		if (init[i].delay_us)
+			fsleep(init[i].delay_us);
 	}
 
 	return 0;
