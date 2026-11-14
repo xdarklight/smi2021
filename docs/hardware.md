@@ -160,17 +160,43 @@ A test firmware with a counting handler on each of the 48 words of
 0x0000–0x005f, so that it would catch vectors 2 bytes apart as well as 4,
 saw only 0x002c taken, about once per USB event during an enumeration
 (observed, on an EasyCAP 002). Whether the other vectors exist is not known:
-their sources may just never have been enabled. With interrupts enabled,
-the test firmware stopped working within a few control transfers, even
-with a handler that only read the event registers and counted, while the
-same firmware polling the controller worked (observed). With a handler
-that touched no register of the controller, only SRAM, or with a bare
-`RETI`, it did not even get through an enumeration (observed). So the
-interrupt presumably stays requested until the handler reads an event
-register, 0x1503 or 0x1502, and a handler that doesn't starves the main
-loop (inferred). Why a handler that does read them still fails is not
-known. The original firmware enables interrupts but polls too, see
-[Interrupt](#interrupt).
+their sources may just never have been enabled.
+
+With interrupts enabled, the test firmware fails, while the same firmware
+polling the controller works (observed, on an EasyCAP 002, with the
+handlers below on vector 11 and the main loop polling as well):
+
+| Handler on vector 11 | Result |
+|----------------------|--------|
+| the event handling of [Interrupt](#interrupt), in C | through an enumeration at best, then fails within a few control transfers |
+| reads 0x1503, 0x1502, 0x151c and 0x1518 and counts, in C | as above |
+| a bare `RETI`; counts in SRAM only; reads 0x1503 only; reads 0x1502 only | does not get through an enumeration |
+| reads 0x1503 and 0x1502, with its registers saved to fixed SRAM instead of the stack | does not get through an enumeration |
+| what the original handler does, also without the stack: on a setup packet, withdraws the pending packet, flags it and clears 0x1502 bit 4 | does not get through an enumeration |
+
+What these runs ruled out (observed):
+
+- The core clears the I flag when it takes an interrupt, and the handlers
+  never nested: SREG read in the handler has I clear, and a nesting
+  counter never got past 1.
+- The return addresses the core pushes are right: 77 of them, recorded by
+  the handler, were all the start of an instruction.
+- Reading 0x1503 or 0x1502 doesn't change them: read twice in a row, by
+  the polling firmware, each gave the same value both times.
+- It is not the way avr-gcc changes the stack pointer for a stack frame,
+  writing SPL one instruction after interrupts are enabled again: with no
+  stack frame anywhere, the firmware failed the same way.
+- It is not the handler's use of the hardware stack: the handlers that
+  keep their registers in fixed places fail as well.
+
+Before failing, the firmware was found executing a census handler of
+another vector, with interrupts enabled, and so not entered through an
+interrupt: the program had jumped into the vector table, which points to
+a corrupted stack or a corrupted register (observed once). What corrupts
+it is not known. The original firmware runs with interrupts enabled all
+the time, so the hardware can, and its main loop calls the same handler
+on every pass, see [Interrupt](#interrupt); a replacement should poll and
+leave interrupts disabled.
 
 After the vector table, both images place the initial values of their
 SRAM variables, from 0x0060 to 0x019b (`3c`) or 0x0197 (`3f`), which the
