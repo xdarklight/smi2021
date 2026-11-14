@@ -608,8 +608,10 @@ Version 0.1 on an EasyCAP 002, uploaded through the bootloader with
   requests each of the device and configuration descriptor, identity,
   event log and program memory read, then `soak 10000`, without a restart:
   191608 interrupts, 46 of them through the reset vector. The plain
-  `IRQ=1` build, without the return log in front of the handler, has not
-  been run yet. See `docs/hardware.md` "Interrupt faults".
+  `IRQ=1` build passed the same: 190983 interrupts, 34 of them through the
+  reset vector, all at the same place, right after `irq_on()` in
+  `usb_poll()`; the timing request still measured 30 MHz. See
+  `docs/hardware.md` "Interrupt faults".
 - **Test requests**: all of them work. Experiments 8 to 11 gave: only the
   plain `ELPM` of the instructions tested works, program memory is 8 KB,
   the CPU clock is 30.000 MHz; see `docs/hardware.md` "Experiments".
