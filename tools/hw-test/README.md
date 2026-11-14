@@ -206,6 +206,13 @@ claims the interface, so the driver must be unloaded:
     rmmod smi2021
     ./stall-test.py 20
 
+`out-test.py` checks the data stage of OUT requests, with register writes
+of 1 to 255 bytes in requests of one to five packets into SRAM that
+OpenSMI21 leaves unused, read back and compared. It needs OpenSMI21, as
+other firmware may use that SRAM:
+
+    ./out-test.py
+
 ## What the pattern proves, and what it does not
 
 The frame counter is a row of binary blocks rather than rendered digits, so

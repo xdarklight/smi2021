@@ -46,6 +46,7 @@
 #define EP0_CFG		REG8(0x1511)
 #define EP0_MPS_A	REG8(0x1513)
 #define EP0_MPS_B	REG8(0x1515)
+#define EP0_RX_LEN	REG8(0x1517)
 #define EP0_RX_STAT	REG8(0x1518)
 #define EP0_RX_ADDR_L	REG8(0x1519)
 #define EP0_RX_ADDR_H	REG8(0x151a)

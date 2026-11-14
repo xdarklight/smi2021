@@ -123,7 +123,9 @@ unloaded:
   until the next event, a reset, speed or suspend event is handled again
   on every pass until another one arrives.
 - **Control endpoint**: setup packet from 0x2000, OUT data packets from
-  0x2000, IN data packets of up to 64 bytes at 0x2040 with the length in
+  0x2000 with their length from 0x1517 (a short packet ends the data
+  stage, and the request is handled with the bytes that arrived), IN data
+  packets of up to 64 bytes at 0x2040 with the length in
   0x151b and 0x151c bit 7 to send, zero length status packets, stall with
   0x1510 bits 2–1 = 10. Every wait gives up when a new setup packet or a bus
   reset arrives. Fixed against the original as `docs/hardware.md` "Writing
@@ -407,6 +409,12 @@ Version 0.1 on an EasyCAP 002, uploaded through the bootloader with
   endpoint 0. All 260 were stalled, the valid requests after each one
   worked, the halt feature of 0x82 was set, reported and cleared, and the
   device never enumerated again.
+- **OUT data stage**: with the length of each packet from 0x1517,
+  `tools/hw-test/out-test.py` wrote 1 to 255 bytes into unused SRAM in
+  requests of one to five packets, some padded, and read every one back
+  unchanged; the stall test and the driver tests passed as before. No
+  host at hand sends a short packet within the data stage, so ending it
+  early is not tested.
 
 ## Untested and risks
 
@@ -420,6 +428,3 @@ Points most likely to need attention next:
   transfers that the hardware completes itself and the address change
   after the status packet are right as far as enumeration, the Linux
   driver and the stall test exercise them.
-- **OUT data packets**: like the original, the firmware takes 64 bytes, or
-  what is left of `wLength`, from each, and doesn't read 0x1517, which
-  presumably holds the length of a received packet (inferred).

@@ -269,20 +269,30 @@ static uint8_t ep0_tx(const uint8_t *p, uint8_t n)
 	return 1;
 }
 
-/* Receive one packet; there is no length register, n is what is expected */
+/* ep0_rx() when a new setup packet or a bus reset ended the transfer */
+#define EP0_RX_ABORTED	0xff
+
+/*
+ * Receive one packet of up to n bytes, the most that the transfer still
+ * expects. Returns the number of bytes taken, from the length of the
+ * packet in 0x1517: fewer than n if the host sent a short packet.
+ */
 static uint8_t ep0_rx(uint8_t *p, uint8_t n)
 {
-	uint8_t i;
+	uint8_t i, len;
 
 	while (!(EP0_RX_STAT & EP_FULL))
 		if (ctrl_aborted())
-			return 0;
+			return EP0_RX_ABORTED;
 
+	len = EP0_RX_LEN;
+	if (len < n)
+		n = len;
 	for (i = 0; i < n; i++)
 		p[i] = REG8(EP0_RX_BUF + i);
 	EP0_RX_STAT &= ~EP_FULL;
 
-	return 1;
+	return n;
 }
 
 /*
@@ -503,7 +513,7 @@ static void handle_setup(void)
 {
 	uint8_t *raw;
 	struct setup s;
-	uint8_t type, chunk, err, addr = 0xff;
+	uint8_t type, chunk, got, err, addr = 0xff;
 	uint16_t len = 0, off;
 
 	while (!(EP0_RX_STAT & EP_FULL))
@@ -546,16 +556,22 @@ static void handle_setup(void)
 	for (off = 0; off < XBUF_SIZE; off++)
 		xbuf[off] = 0;
 
-	for (off = 0; off < s.wLength; off += chunk) {
+	/* a short packet ends the data stage early, as USB has it */
+	for (off = 0; off < s.wLength; off += got) {
 		chunk = s.wLength - off > EP0_MPS ? EP0_MPS : s.wLength - off;
-		if (!ep0_rx(xbuf + off, chunk))
+		got = ep0_rx(xbuf + off, chunk);
+		if (got == EP0_RX_ABORTED)
 			return;
+		if (got < chunk) {
+			off += got;
+			break;
+		}
 	}
 
 	if (type == SETUP_TYPE_STD)
 		err = std_out(&s, &addr);
 	else if (type == SETUP_TYPE_VENDOR)
-		err = vendor_out(&s, s.wLength);
+		err = vendor_out(&s, off);
 	else
 		err = 1;
 
