@@ -116,7 +116,7 @@ void stream_start(void)
 		AUDIO_CTRL |= 0x05;
 		break;
 	case 3:
-		ENG_MODE3 |= 0x80;
+		ENG_MODE3 |= ENG_MODE3_ON;
 		break;
 	case 4:
 		ENG_MODE4 = 1;
@@ -126,7 +126,7 @@ void stream_start(void)
 		AUDIO_CTRL |= 0x05;
 		break;
 	}
-	STREAM_CTRL |= 0x80;
+	STREAM_CTRL |= STREAM_CTRL_ON;
 	started_mode = cur_mode;
 }
 
@@ -143,7 +143,7 @@ void stream_stop(void)
 		AUDIO_CTRL &= ~0x05;
 		break;
 	case 3:
-		ENG_MODE3 &= ~0x80;
+		ENG_MODE3 &= ~ENG_MODE3_ON;
 		break;
 	case 4:
 		ENG_MODE4 = 0;
@@ -154,7 +154,7 @@ void stream_stop(void)
 		break;
 	}
 	if (started_mode)
-		STREAM_CTRL &= ~0x80;
+		STREAM_CTRL &= ~STREAM_CTRL_ON;
 	started_mode = 0;
 #endif
 }
@@ -314,7 +314,7 @@ uint8_t vendor_in(const struct setup *s, uint16_t *len)
 		n = 37;
 		break;
 	case 0xfb:
-		SYS_CTRL &= ~0x80;
+		SYS_CTRL &= ~SYS_CTRL_REQ_FB;
 		xbuf[1] = 0x01;
 		n = 2;
 		break;

@@ -24,14 +24,14 @@
 #define DDRC		_SFR_IO8(0x14)
 
 /* USB device controller, 0x1500-0x157f */
-#define USB_CTRL	REG8(0x1500)	/* bit 3: disconnect, bit 2: suspend */
-#define USB_CTRL_DISCONNECT	0x08
-#define USB_CTRL_SUSPEND	0x04
-#define USB_SPEED	REG8(0x1501)	/* bit 1: high speed */
-#define USB_SPEED_HIGH		0x02
-#define USB_STATUS	REG8(0x1502)	/* bit 4: setup packet received */
-#define USB_STATUS_SETUP	0x10
-#define USB_EVENT	REG8(0x1503)	/* code of the last event, see docs */
+#define USB_CTRL	REG8(0x1500)
+#define USB_CTRL_DISCONNECT	_BV(3)
+#define USB_CTRL_SUSPEND	_BV(2)
+#define USB_SPEED	REG8(0x1501)
+#define USB_SPEED_HIGH		_BV(1)
+#define USB_STATUS	REG8(0x1502)
+#define USB_STATUS_SETUP	_BV(4)
+#define USB_EVENT	REG8(0x1503)
 #define USB_ADDR	REG8(0x1504)
 #define USB_IRQ_CFG	REG8(0x1507)	/* 0xc4 at start, meaning unknown */
 #define USB_TESTMODE	REG8(0x1509)	/* inferred, unused */
@@ -42,23 +42,23 @@
 #define USB_EVT_SUSPEND		0x85
 
 /* Control endpoint */
-#define EP0_CTRL	REG8(0x1510)	/* bits 2-1: 00 normal, 10 stall */
+#define EP0_CTRL	REG8(0x1510)
 #define EP0_CFG		REG8(0x1511)
 #define EP0_MPS_A	REG8(0x1513)
 #define EP0_MPS_B	REG8(0x1515)
-#define EP0_RX_STAT	REG8(0x1518)	/* bit 7: receive buffer full */
+#define EP0_RX_STAT	REG8(0x1518)
 #define EP0_RX_ADDR_L	REG8(0x1519)
 #define EP0_RX_ADDR_H	REG8(0x151a)
 #define EP0_TX_LEN	REG8(0x151b)
-#define EP0_TX_STAT	REG8(0x151c)	/* bit 7: packet armed */
+#define EP0_TX_STAT	REG8(0x151c)
 #define EP0_TX_ADDR_L	REG8(0x151d)
 #define EP0_TX_ADDR_H	REG8(0x151e)
 
-#define EP_STATE_MASK	0x06		/* bits 2-1 of +0 */
-#define EP_STATE_NORMAL	0x00
-#define EP_STATE_OFF	0x02		/* "01" */
-#define EP_STATE_STALL	0x04		/* "10" */
-#define EP_FULL		0x80
+#define EP_STATE_MASK	(_BV(2) | _BV(1))
+#define EP_STATE_NORMAL	0
+#define EP_STATE_OFF	_BV(1)
+#define EP_STATE_STALL	_BV(2)
+#define EP_FULL		_BV(7)
 
 /* USB buffer memory of the control endpoint */
 #define EP0_RX_BUF	0x2000
@@ -80,11 +80,15 @@
 
 /* Streaming engines */
 #define ENG_MODE3	REG8(0x1580)
-#define STREAM_CTRL	REG8(0x1600)	/* bit 7: streaming started */
+#define ENG_MODE3_ON		_BV(7)
+#define STREAM_CTRL	REG8(0x1600)
+#define STREAM_CTRL_ON		_BV(7)
 #define AUDIO_CTRL	REG8(0x1740)
 #define VIDEO_CTRL	REG8(0x1800)
 #define STREAM_SRC	REG8(0x1880)
-#define SYS_CTRL	REG8(0x3080)	/* bit 7: cleared on request, 4: suspend */
+#define SYS_CTRL	REG8(0x3080)
+#define SYS_CTRL_REQ_FB		_BV(7)	/* cleared by request 0xfb, purpose unknown */
+#define SYS_CTRL_SUSPEND	_BV(4)
 #define ENG_MODE4	REG8(0x3100)
 
 /* I2C engines */
@@ -96,8 +100,8 @@
 #define I2C_SUBADDR	3
 #define I2C_SLAVE	4
 #define I2C_DATA	5
-#define I2C_ST_BUSY	0x10
-#define I2C_ST_FAIL	0x20
-#define I2C_ST_DONE	0xc0
+#define I2C_ST_BUSY	_BV(4)
+#define I2C_ST_FAIL	_BV(5)
+#define I2C_ST_DONE	(_BV(7) | _BV(6))
 
 #endif /* OPENSMI21_REGS_H */

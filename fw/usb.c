@@ -205,7 +205,7 @@ static uint8_t ctrl_aborted(void)
 	if (irq_storm)
 		usb_check_events();
 	r = usb_events & (EV_SETUP | EV_RESET);
-	if (sreg & (1 << SREG_I))
+	if (sreg & _BV(SREG_I))
 		irq_armed = 1;
 #else
 	usb_check_events();
@@ -461,7 +461,7 @@ static uint8_t std_out(const struct setup *s, uint8_t *addr)
 		} else {
 			block_set_state(ep82_block(), EP_STATE_NORMAL);
 			/* resets the data toggle (inferred) */
-			EPX_CTRL(ep82_block()) &= ~0x01;
+			EPX_CTRL(ep82_block()) &= ~_BV(0);
 			ep82_halted = 0;
 		}
 		return 0;
@@ -595,9 +595,9 @@ static void handle_speed(void)
 
 static void handle_suspend(void)
 {
-	PORTC &= ~(1 << PC0);
-	DDRC |= 1 << PC0;
-	SYS_CTRL |= 0x10;
+	PORTC &= ~_BV(PC0);
+	DDRC |= _BV(PC0);
+	SYS_CTRL |= SYS_CTRL_SUSPEND;
 	USB_CTRL |= USB_CTRL_SUSPEND;
 }
 
@@ -662,8 +662,8 @@ void usb_init(void)
 	EPX_MPS_H(EPB_BASE) = 0x03;
 
 	/* drive PC0 low without a glitch: port first, then direction */
-	PORTC &= ~(1 << PC0);
-	DDRC |= 1 << PC0;
+	PORTC &= ~_BV(PC0);
+	DDRC |= _BV(PC0);
 
 	/*
 	 * Soft disconnect, so that the host enumerates the device again. The
