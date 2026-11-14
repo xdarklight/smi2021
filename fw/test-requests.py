@@ -6,7 +6,7 @@ usage: test-requests.py identity | events | census | crash [LEN] | irq | ret |
                         reset | insn N [RAMPZ] |
                         pm ADDR LEN [RAMPZ [elpm]] | timing N... |
                         soak N [pm|dev|cfg|id|evl] |
-                        win MODE [PASSES [TIMES]]
+                        win MODE [PASSES [TIMES]] | diag [KNOB]
 
 soak sends N rounds of a program memory read, the device and the
 configuration descriptor and the identity, or N of one of them (evl: the
@@ -73,6 +73,8 @@ def identity(h):
 
 
 SOAK_KINDS = ['pm', 'dev', 'cfg', 'id']
+SPOT_NAMES = ['elsewhere', 'usb_poll(), new event', 'usb_poll(), none',
+              'ctrl_aborted()', 'ep0_tx()', 'test requests']
 
 
 def soak_one(h, kind, ref, i):
@@ -152,6 +154,24 @@ def main():
                       f'0x{(v[3] << 8 | v[2]) + 3:04x}, returning to '
                       f'{2 * ((v[4] << 8) | v[5]):#06x}' if v[0] else
                       'interrupts that entered the reset vector: 0')
+        elif cmd == 'diag':
+            # IRQDIAG=1: with KNOB, set the switches and clear the counts
+            if len(args) > 1:
+                req(h, 0xfa, int(args[1], 0), 3, 44)
+            r = req(h, 0xfa, 0, 0, 44)
+            knob, spot, r1503, r1502, total = struct.unpack('<BBBBI', r[:8])
+            taken = struct.unpack('<6I', r[8:32])
+            vec0 = struct.unpack('<6H', r[32:44])
+            print(f'knob 0x{knob:02x} (shape {knob & 3}, delay {knob >> 2 & 7}'
+                  f'{", service in handler" if knob & 0x20 else ""}'
+                  f'{", minimal window" if knob & 0x40 else ""}): '
+                  f'{total} interrupts, {sum(vec0)} through the reset vector')
+            for i, name in enumerate(SPOT_NAMES):
+                print(f'  {name:28s} {taken[i]:8d} taken, {vec0[i]:5d} '
+                      'through the reset vector')
+            if sum(vec0):
+                print(f'  last one at {SPOT_NAMES[spot]}, 0x1503 = '
+                      f'0x{r1503:02x}, 0x1502 = 0x{r1502:02x}')
         elif cmd == 'win':
             mode = int(args[1], 0)
             passes = int(args[2], 0) if len(args) > 2 else 1

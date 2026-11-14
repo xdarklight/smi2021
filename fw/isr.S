@@ -34,6 +34,14 @@ vec0_rec:			/* count, SREG, SPL, SPH (less 3), return address */
 	.skip	6
 vec0_tmp:
 	.skip	2
+#if FW_IRQDIAG
+	.global	vec0_flag
+	.global	vec0_regs
+vec0_flag:			/* set here, taken by the handler */
+	.skip	1
+vec0_regs:			/* 0x1503 and 0x1502 as found here */
+	.skip	2
+#endif
 	.section .init1, "ax", @progbits
 	sts	vec0_tmp, r24
 	in	r24, SREG_IO
@@ -68,6 +76,14 @@ vec0_tmp:
 	sts	vec0_rec + 3, r24
 	lds	r24, vec0_tmp + 1
 	sts	vec0_rec + 1, r24
+#if FW_IRQDIAG
+	lds	r24, 0x1503
+	sts	vec0_regs, r24
+	lds	r24, 0x1502
+	sts	vec0_regs + 1, r24
+	ldi	r24, 1
+	sts	vec0_flag, r24
+#endif
 	lds	r24, vec0_rec
 	inc	r24
 	breq	1f

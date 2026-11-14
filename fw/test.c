@@ -21,6 +21,7 @@
 #define TEST_IRQ		0xf7
 #define TEST_RETLOG		0xf8
 #define TEST_WIN		0xf9
+#define TEST_IRQDIAG		0xfa
 
 #define INSN_MUL		0
 #define INSN_MOVW		1
@@ -64,7 +65,7 @@ static uint16_t identity(void)
 	irq_off();
 	put16(xbuf + 24, usb_unknown_events);
 	put16(xbuf + 26, irq_census[11]);
-	irq_on();
+	irq_on_at(SPOT_TEST);
 	xbuf[28] = (FW_PUSH_GUARD ? 0x01 : 0) | (FW_ISR_BARE << 4);
 
 	return 29;
@@ -153,7 +154,7 @@ static uint16_t census(uint8_t clear)
 	xbuf[2 * NUM_VECTORS] = irq_last;
 	if (clear)
 		irq_last = 0xff;
-	irq_on();
+	irq_on_at(SPOT_TEST);
 
 	return 2 * NUM_VECTORS + 1;
 }
@@ -174,7 +175,7 @@ static uint16_t event_log(uint8_t clear)
 		evlog_pos = 0;
 		evlog_count = 0;
 	}
-	irq_on();
+	irq_on_at(SPOT_TEST);
 
 	return 2 + 2 * EVLOG_SIZE;
 }
@@ -204,7 +205,7 @@ uint8_t test_in(const struct setup *s, uint16_t *len)
 		/* nothing may add cycles to the loop */
 		irq_off();
 		delay_1000(s->wValue);
-		irq_on();
+		irq_on_at(SPOT_TEST);
 		put16(xbuf, s->wValue);
 		put16(xbuf + 2, 1000);
 		*len = 4;
@@ -224,7 +225,7 @@ uint8_t test_in(const struct setup *s, uint16_t *len)
 		for (n = 0; n < sizeof(vec0_rec); n++)
 			xbuf[2 * sizeof(retlog) + n] = vec0_rec[n];
 #endif
-		irq_on();
+		irq_on_at(SPOT_TEST);
 		/* 200, see fw.h, and 6 bytes of vec0_rec with IRQ=1 */
 		*len = 2 * sizeof(retlog) + (FW_IRQ ? sizeof(vec0_rec) : 0);
 		return 0;
@@ -245,11 +246,26 @@ uint8_t test_in(const struct setup *s, uint16_t *len)
 		*len = WREC_SIZE + 2;
 		return 0;
 #endif
+#if FW_IRQDIAG
+	case TEST_IRQDIAG:
+		/* wIndex bit 1 clears the statistics, bit 0 sets the knob */
+		irq_off();
+		if (s->wIndex & 2)
+			for (n = 1; n < sizeof(irqdiag); n++)
+				((volatile uint8_t *)&irqdiag)[n] = 0;
+		if (s->wIndex & 1)
+			irqdiag.knob = s->wValue;
+		for (n = 0; n < sizeof(irqdiag); n++)
+			xbuf[n] = ((volatile uint8_t *)&irqdiag)[n];
+		irq_on_at(SPOT_TEST);
+		*len = sizeof(irqdiag);
+		return 0;
+#endif
 	case TEST_IRQ:
 		irq_off();
 		for (n = 0; n < sizeof(irqrec); n++)
 			xbuf[n] = ((volatile uint8_t *)&irqrec)[n];
-		irq_on();
+		irq_on_at(SPOT_TEST);
 		*len = sizeof(irqrec);
 		return 0;
 	case TEST_CRASH:
