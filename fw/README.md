@@ -81,7 +81,11 @@ fails if the image grows beyond 7502 bytes, the largest image known to
 work, though program memory is 8 KB. `make` also runs `check.sh`, see
 [Checks](#checks). Built with avr-gcc 7.3.0 and the defaults, version 0.1
 is 5724 bytes, 5766 padded (93 upload units); with `IRQ=1`, 6062 bytes,
-6076 padded (98 upload units).
+6076 padded (98 upload units). It also builds with avr-gcc 16.2.0,
+binutils 2.47 and avr-libc 2.3.2 (Arch Linux), to 5552 bytes, 5580 padded
+(90 upload units), and 5892 bytes with `IRQ=1`. On an EasyCAP 002, that
+default build enumerates, answers the identity, runs 2000 rounds of
+`soak` without a restart and times 30 MHz.
 
 To use it with the Linux driver, install it in place of the vendor image:
 

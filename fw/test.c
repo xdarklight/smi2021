@@ -41,7 +41,10 @@ static void put16(uint8_t *p, uint16_t v)
 
 static uint16_t identity(void)
 {
-	static const char magic[9] = "OpenSMI21";
+	/* no NUL: the reply holds the nine letters only */
+	static const char magic[9] = {
+		'O', 'p', 'e', 'n', 'S', 'M', 'I', '2', '1'
+	};
 	uint8_t i;
 
 	for (i = 0; i < sizeof(magic); i++)

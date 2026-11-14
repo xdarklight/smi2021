@@ -48,8 +48,15 @@ function hex(s,   i, v) {
 	return v
 }
 
+# A function starts at a symbol. Newer binutils (2.47) also show the
+# local labels of the assembler (.L...) as symbols; they are part of the
+# function before them, so they do not start a new one. No quotes here:
+# this is inside the quoted awk program.
 /^[0-9a-f]+ <[^>]+>:$/ {
-	fn = $2; gsub(/[<>:]/, "", fn)
+	name = $2; gsub(/[<>:]/, "", name)
+	if (name ~ /^\.L/)
+		next
+	fn = name
 	safe = 0
 	next
 }
