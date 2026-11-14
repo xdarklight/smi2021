@@ -299,11 +299,19 @@ uint8_t vendor_in(const struct setup *s, uint16_t *len)
 	if (s->bRequest != 0x01)
 		return 1;
 
+	xbuf[0] = v;
+
 	switch (v) {
 	case MODE_HEAD:
 		xbuf[1] = cur_mode;
-		n = 2;
-		break;
+		*len = 2;
+		return 0;
+	case 0xfb:
+		SYS_CTRL &= ~SYS_CTRL_REQ_FB;
+		xbuf[1] = 0x01;
+		*len = 2;
+		return 0;
+	/* the reply to the last register access, of 13, 21 or 37 bytes */
 	case 0x0b:
 		n = 13;
 		break;
@@ -313,20 +321,12 @@ uint8_t vendor_in(const struct setup *s, uint16_t *len)
 	case 0x0d:
 		n = 37;
 		break;
-	case 0xfb:
-		SYS_CTRL &= ~SYS_CTRL_REQ_FB;
-		xbuf[1] = 0x01;
-		n = 2;
-		break;
 	default:
 		return 1;
 	}
 
-	if (v >= 0x0b && v <= 0x0d)
-		for (i = 1; i < n; i++)
-			xbuf[i] = reply[i - 1];
-
-	xbuf[0] = v;
+	for (i = 1; i < n; i++)
+		xbuf[i] = reply[i - 1];
 	*len = n;
 
 	return 0;
