@@ -137,8 +137,31 @@ struct irq_record {
 	uint8_t storm;			/* interrupts were switched off for good */
 	uint8_t n;			/* entries in log[] */
 	uint8_t log[IRQLOG_SIZE][4];	/* 0x1503, 0x1502, 0x151c, 0x1518 */
+	/*
+	 * For the first setup packets the main loop finds: 0x1503 and 0x1502,
+	 * each read twice in a row, to tell whether reading them changes them.
+	 */
+	uint8_t nd;
+	uint8_t dbl[IRQLOG_SIZE][4];
 };
 extern volatile struct irq_record irqrec;
+
+/*
+ * Interrupt test ISR_BARE=5, request 0xf8: at each entry of vector 11, the
+ * return address on the stack, as two raw bytes, and SREG as found on
+ * entry, in a ring; and how deep the handler nested. Kept across a restart
+ * without power loss and copied aside then, see main().
+ */
+#define RETLOG_SIZE	32
+struct ret_record {
+	uint8_t pos;			/* entries ever written, wraps */
+	uint8_t depth;			/* handlers running right now */
+	uint8_t maxdepth;		/* the most that ever ran at once */
+	uint8_t pad;
+	uint8_t addr[RETLOG_SIZE][3];
+};
+extern volatile struct ret_record retlog;
+extern struct ret_record retlog_crash;
 
 static inline void irq_on(void)
 {

@@ -25,6 +25,8 @@ static uint16_t boot_magic __attribute__((section(".noinit")));
 uint16_t reset_sp __attribute__((section(".noinit")));
 struct dbg_record dbg_now __attribute__((section(".noinit")));
 struct dbg_record dbg_crash;
+volatile struct ret_record retlog __attribute__((section(".noinit")));
+struct ret_record retlog_crash;
 
 /*
  * The delay unit of the original bring-up, about 160 cycles: 39 passes of
@@ -49,7 +51,12 @@ int main(void)
 		for (i = 0; i < sizeof(dbg_crash); i++)
 			((uint8_t *)&dbg_crash)[i] = ((uint8_t *)&dbg_now)[i];
 		dbg_crash.reset_sp = reset_sp;
+		for (i = 0; i < sizeof(retlog_crash); i++)
+			((uint8_t *)&retlog_crash)[i] =
+				((volatile uint8_t *)&retlog)[i];
 	}
+	for (i = 0; i < sizeof(retlog); i++)
+		((volatile uint8_t *)&retlog)[i] = 0;
 	for (i = 0; i < sizeof(dbg_now); i++)
 		((uint8_t *)&dbg_now)[i] = 0;
 	boot_count++;

@@ -13,6 +13,11 @@
 #                              loop polls the events (interrupt test)
 #   make ISR_BARE=1            vector 11 is a bare RETI (interrupt test)
 #   make ISR_BARE=2            vector 11 counts but reads no register
+#   make ISR_BARE=3            vector 11 reads 0x1503 and nothing else
+#   make ISR_BARE=4            vector 11 reads 0x1502 and nothing else
+#   make ISR_BARE=5            vector 11 notes its return address (0xf8)
+#   make ISR_BARE=6            vector 11 reads as the vendor's, no hw stack
+#   make ISR_BARE=7            vector 11 does what the vendor's does, no hw stack
 
 CROSS		?= avr-
 CC		:= $(CROSS)gcc

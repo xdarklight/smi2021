@@ -31,7 +31,7 @@
 #define USB_SPEED_HIGH		0x02
 #define USB_STATUS	REG8(0x1502)	/* bit 4: setup packet received */
 #define USB_STATUS_SETUP	0x10
-#define USB_EVENT	REG8(0x1503)	/* reading acknowledges (inferred) */
+#define USB_EVENT	REG8(0x1503)	/* code of the last event, see docs */
 #define USB_ADDR	REG8(0x1504)
 #define USB_IRQ_CFG	REG8(0x1507)	/* 0xc4 at start, meaning unknown */
 #define USB_TESTMODE	REG8(0x1509)	/* inferred, unused */

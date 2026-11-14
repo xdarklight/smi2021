@@ -28,6 +28,11 @@ and Ubuntu that is `gcc-avr`, `binutils-avr` and `avr-libc`; on Arch Linux
     make IRQ=1 ISR_EVENTS=0           # vector 11 only counts and logs
     make IRQ=1 ISR_BARE=1             # vector 11 is a bare RETI
     make IRQ=1 ISR_BARE=2             # vector 11 counts, reads no register
+    make IRQ=1 ISR_BARE=3             # vector 11 reads 0x1503 only
+    make IRQ=1 ISR_BARE=4             # vector 11 reads 0x1502 only
+    make IRQ=1 ISR_BARE=5             # vector 11 records its return address
+    make IRQ=1 ISR_BARE=6             # reads 0x1503, 0x1502, no stack
+    make IRQ=1 ISR_BARE=7             # does what the original does, no stack
 
 `IRQ=0`, the default, never enables interrupts and polls the controller,
 as `docs/hardware.md` "Interrupt" advises; with interrupts enabled the
@@ -225,7 +230,7 @@ following:
 ## Test requests
 
 All test requests are vendor IN requests to the device: `bmRequestType`
-0xc0, `bRequest` 0xf0 to 0xf7. They don't clash with `bRequest` 0x01 of
+0xc0, `bRequest` 0xf0 to 0xf8. They don't clash with `bRequest` 0x01 of
 the driver and the bootloader, and work in every device state. A reply
 longer than `wLength` is cut to `wLength`. Unknown `bRequest` values from
 0xf0 up are stalled. Multi-byte values are little endian. Nothing writes
@@ -249,7 +254,7 @@ and decodes the reply, for example:
 | 11 | 1 | firmware version, minor (1) |
 | 12 | 2 | USB product id |
 | 14 | 2 | image size in bytes, without padding |
-| 16 | 1 | build options: bit 0 `ALT0_STOP`, bit 1 `IRQ`, bit 2 `ISR_EVENTS`, bit 3 `VECTORS=rjmp48` (before avr-libc), bit 4 `ISR_BARE=1`, bit 5 `ISR_BARE=2` |
+| 16 | 1 | build options: bit 0 `ALT0_STOP`, bit 1 `IRQ`, bit 2 `ISR_EVENTS`, bit 3 `VECTORS=rjmp48` (before avr-libc), bit 4 `ISR_BARE=1`, bit 5 `ISR_BARE=2`, bit 6 `ISR_BARE=3`, bit 7 `ISR_BARE=4`; `ISR_BARE` 5 to 7 have no bit |
 | 17 | 1 | current mode |
 | 18 | 2 | start counter: number of starts since the counter was last found invalid (see 0xf3) |
 | 20 | 1 | last vector that hit a census stub, 0xff for none |
@@ -388,7 +393,7 @@ short one.
 
 ### 0xf7: interrupt record
 
-`wValue` 0, `wIndex` 0, `wLength` 38.
+`wValue` 0, `wIndex` 0, `wLength` 71.
 
 | Offset | Contents |
 |--------|----------|
@@ -396,10 +401,39 @@ short one.
 | 4 | 1 if the storm guard switched interrupts off for good |
 | 5 | number of entries below, up to 8 |
 | 6–37 | for the first 8 calls of vector 11: 0x1503, 0x1502, 0x151c and 0x1518 as read on entry |
+| 38 | number of entries below, up to 8 |
+| 39–70 | for the first 8 setup packets the main loop finds: 0x1503 read twice in a row, then 0x1502 read twice in a row |
+
+The second table is filled in every build; it showed that reading 0x1503
+or 0x1502 doesn't change them.
 
 The storm guard switches interrupts off for good when vector 11 was taken
 more than 50 times between two passes of the main loop, so that an
 interrupt that keeps firing leaves the firmware able to report it.
+
+### 0xf8: return addresses of vector 11
+
+`wValue` 0, `wIndex` 0, `wLength` 200. Filled with `ISR_BARE=5` only.
+
+| Offset | Contents |
+|--------|----------|
+| 0–99 | the record as it was at the last restart without power loss |
+| 100–199 | the record now |
+
+Each record:
+
+| Offset | Contents |
+|--------|----------|
+| 0 | number of entries ever written, wrapping at 256 |
+| 1 | number of handlers running right now |
+| 2 | the most that ever ran at once |
+| 3 | 0 |
+| 4–99 | a ring of 32 entries of 3 bytes: the return address the core pushed, as the two bytes on the stack (high byte first, a word address), and SREG as found in the handler |
+
+The record lives in a part of SRAM that the startup code doesn't clear,
+and is copied aside at a restart without power loss, before interrupts
+are enabled again. The firmware may hang rather than restart, so it is
+best read over and over while the firmware runs.
 
 ## Checks
 
@@ -472,15 +506,15 @@ Version 0.1 on an EasyCAP 002, uploaded through the bootloader with
   packet, as it took events from vector 11 alone and read 0x1503 once, as
   the documents then said. Polled as the original firmware does, it
   enumerates at high speed and is configured.
-- **Interrupts**: with interrupts enabled, even with a handler on vector
-  11 that only reads the event registers and counts, the firmware stops
-  answering within a few control transfers, and enumerations break off
-  with `-71`. Only 0x002c is taken, about once per USB event; no other
-  slot of a 48 `RJMP` table was hit. With a bare `RETI` (`ISR_BARE=1`) or a
-  handler that reads no register of the controller (`ISR_BARE=2`), it does
-  not even get through an enumeration, so the interrupt presumably stays
-  requested until an event register is read. Why it fails with a handler
-  that reads them is open; `IRQ=0` is the default.
+- **Interrupts**: with interrupts enabled, the firmware fails with every
+  handler tried on vector 11, from a bare `RETI` to one that does what the
+  original handler does without touching the stack (`ISR_BARE=1` to `7`):
+  at best it gets through an enumeration and stops answering within a
+  few control transfers. Only 0x002c is taken, about once per USB event.
+  The core clears I on entry, handlers don't nest, the return addresses
+  are right, and neither the stack frames' SP update nor the use of the
+  stack in the handler is the cause; see `docs/hardware.md` "Program
+  memory". What is, is open; `IRQ=0` is the default.
 - **Test requests**: all of them work. Experiments 8 to 11 gave: only the
   plain `ELPM` of the instructions tested works, program memory is 8 KB,
   the CPU clock is 30.000 MHz; see `docs/hardware.md` "Experiments".

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Use the test requests of OpenSMI21, see README.md "Test requests".
 
-usage: test-requests.py identity | events | census | crash [LEN] | irq |
+usage: test-requests.py identity | events | census | crash [LEN] | irq | ret |
                         reset | insn N [RAMPZ] | pm ADDR LEN [RAMPZ [elpm]] |
                         timing N...
 
@@ -72,12 +72,30 @@ def main():
                 if any(e):
                     print('   ', e.hex(' '))
         elif cmd == 'irq':
-            r = req(h, 0xf7, length=38)
+            r = req(h, 0xf7, length=71)
+            r = r + bytes(71 - len(r))
             v11, storm, n = struct.unpack('<IBB', r[:6])
             print(f'vector 11 taken {v11} times, storm guard '
                   f'{"tripped" if storm else "not tripped"}; first {n} '
                   'calls (0x1503 0x1502 0x151c 0x1518):',
                   ', '.join(r[6 + 4 * i:10 + 4 * i].hex(' ') for i in range(n)))
+            nd = r[38]
+            print(f'first {nd} setup packets in the main loop (0x1503 twice, '
+                  '0x1502 twice):',
+                  ', '.join(r[39 + 4 * i:43 + 4 * i].hex(' ') for i in range(nd)))
+        elif cmd == 'ret':
+            r = req(h, 0xf8, length=132)
+            r = r + bytes(132 - len(r))
+            for name, rec in (('at the last restart', r[:66]),
+                              ('now', r[66:])):
+                pos = rec[0]
+                n = min(pos, 32)
+                first = pos - n
+                entries = [rec[2 + 2 * (i % 32):4 + 2 * (i % 32)]
+                           for i in range(first, pos)]
+                print(f'{name}: {pos} entries written; last {n}, oldest first,'
+                      ' as the two bytes above the saved registers:')
+                print('   ', ' '.join(e.hex() for e in entries))
         elif cmd == 'reset':
             h.resetDevice()
             print('port reset')

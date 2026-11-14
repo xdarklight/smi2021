@@ -19,6 +19,7 @@
 #define TEST_EVLOG		0xf5
 #define TEST_CRASH		0xf6
 #define TEST_IRQ		0xf7
+#define TEST_RETLOG		0xf8
 
 #define INSN_MUL		0
 #define INSN_MOVW		1
@@ -51,7 +52,9 @@ static uint16_t identity(void)
 	put16(xbuf + 14, (uint16_t)__image_end);
 	xbuf[16] = (FW_ALT0_STOP ? 0x01 : 0) | (FW_IRQ ? 0x02 : 0) |
 		   (FW_ISR_EVENTS ? 0x04 : 0) |
-		   (FW_ISR_BARE == 1 ? 0x10 : 0) | (FW_ISR_BARE == 2 ? 0x20 : 0);
+		   (FW_ISR_BARE == 1 ? 0x10 : 0) | (FW_ISR_BARE == 2 ? 0x20 : 0) |
+		   (FW_ISR_BARE == 3 ? 0x40 : 0) | (FW_ISR_BARE == 4 ? 0x80 : 0);
+	/* ISR_BARE=5 has no bit of its own: options 0x06 with 0xf8 filled */
 	xbuf[17] = cur_mode;
 	put16(xbuf + 18, boot_count);
 	xbuf[20] = irq_last;
@@ -183,6 +186,17 @@ uint8_t test_in(const struct setup *s, uint16_t *len)
 		return 0;
 	case TEST_EVLOG:
 		*len = event_log(s->wValue & 1);
+		return 0;
+	case TEST_RETLOG:
+		/* the copy from the last restart, then the current ring */
+		for (n = 0; n < sizeof(retlog_crash); n++)
+			xbuf[n] = ((uint8_t *)&retlog_crash)[n];
+		irq_off();
+		for (n = 0; n < sizeof(retlog); n++)
+			xbuf[sizeof(retlog_crash) + n] =
+				((volatile uint8_t *)&retlog)[n];
+		irq_on();
+		*len = 2 * sizeof(retlog);	/* 200, see fw.h */
 		return 0;
 	case TEST_IRQ:
 		irq_off();

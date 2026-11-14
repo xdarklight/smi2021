@@ -144,6 +144,15 @@ static void usb_check_events(void)
 	case USB_EVT_SETUP:
 		status = USB_STATUS;
 		if (status & USB_STATUS_SETUP) {
+			uint8_t nd = irqrec.nd;
+
+			if (nd < IRQLOG_SIZE) {
+				irqrec.dbl[nd][0] = code;
+				irqrec.dbl[nd][1] = USB_EVENT;
+				irqrec.dbl[nd][2] = status;
+				irqrec.dbl[nd][3] = USB_STATUS;
+				irqrec.nd = nd + 1;
+			}
 			USB_STATUS &= ~USB_STATUS_SETUP;
 			/* withdraw a packet of the previous transfer */
 			EP0_TX_STAT &= ~EP_FULL;
@@ -179,7 +188,8 @@ static void usb_check_events(void)
 
 volatile struct irq_record irqrec;
 
-#if FW_ISR_BARE != 1
+#if FW_ISR_BARE != 1 && FW_ISR_BARE != 5 && FW_ISR_BARE != 6 && \
+	FW_ISR_BARE != 7
 void __vector_11(void) __attribute__((signal, used, externally_visible));
 void __vector_11(void)
 {
@@ -191,6 +201,24 @@ void __vector_11(void)
 #if FW_ISR_BARE == 2
 	/* interrupt test: touch no register of the controller */
 	(void)n;
+	return;
+#elif FW_ISR_BARE == 3
+	/* interrupt test: read the event code and nothing else */
+	if (n < IRQLOG_SIZE) {
+		irqrec.log[n][0] = USB_EVENT;
+		irqrec.n = n + 1;
+	} else {
+		(void)USB_EVENT;
+	}
+	return;
+#elif FW_ISR_BARE == 4
+	/* interrupt test: read the status register and nothing else */
+	if (n < IRQLOG_SIZE) {
+		irqrec.log[n][1] = USB_STATUS;
+		irqrec.n = n + 1;
+	} else {
+		(void)USB_STATUS;
+	}
 	return;
 #endif
 	if (n < IRQLOG_SIZE) {
