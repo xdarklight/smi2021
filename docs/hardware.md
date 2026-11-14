@@ -162,45 +162,121 @@ saw only 0x002c taken, about once per USB event during an enumeration
 (observed, on an EasyCAP 002). Whether the other vectors exist is not known:
 their sources may just never have been enabled.
 
-With interrupts enabled, the test firmware fails, while the same firmware
-polling the controller works (observed, on an EasyCAP 002, with the
-handlers below on vector 11 and the main loop polling as well):
-
-| Handler on vector 11 | Result |
-|----------------------|--------|
-| the event handling of [Interrupt](#interrupt), in C | through an enumeration at best, then fails within a few control transfers |
-| reads 0x1503, 0x1502, 0x151c and 0x1518 and counts, in C | as above |
-| a bare `RETI`; counts in SRAM only; reads 0x1503 only; reads 0x1502 only | does not get through an enumeration |
-| reads 0x1503 and 0x1502, with its registers saved to fixed SRAM instead of the stack | does not get through an enumeration |
-| what the original handler does, also without the stack: on a setup packet, withdraws the pending packet, flags it and clears 0x1502 bit 4 | does not get through an enumeration |
-
-What these runs ruled out (observed):
-
-- The core clears the I flag when it takes an interrupt, and the handlers
-  never nested: SREG read in the handler has I clear, and a nesting
-  counter never got past 1.
-- The return addresses the core pushes are right: 77 of them, recorded by
-  the handler, were all the start of an instruction.
-- Reading 0x1503 or 0x1502 doesn't change them: read twice in a row, by
-  the polling firmware, each gave the same value both times.
-- It is not the way avr-gcc changes the stack pointer for a stack frame,
-  writing SPL one instruction after interrupts are enabled again: with no
-  stack frame anywhere, the firmware failed the same way.
-- It is not the handler's use of the hardware stack: the handlers that
-  keep their registers in fixed places fail as well.
-
-Before failing, the firmware was found executing a census handler of
-another vector, with interrupts enabled, and so not entered through an
-interrupt: the program had jumped into the vector table, which points to
-a corrupted stack or a corrupted register (observed once). What corrupts
-it is not known. The original firmware runs with interrupts enabled all
-the time, so the hardware can, and its main loop calls the same handler
-on every pass, see [Interrupt](#interrupt); a replacement should poll and
-leave interrupts disabled.
+Interrupts are taken as on an AVR, but the core has two faults that a
+firmware built with avr-gcc runs into, see [Interrupt
+faults](#interrupt-faults).
 
 After the vector table, both images place the initial values of their
 SRAM variables, from 0x0060 to 0x019b (`3c`) or 0x0197 (`3f`), which the
 startup code copies to the same addresses in SRAM. Code follows.
+
+### Interrupt faults
+
+The core takes vector 11 the way an AVR takes an interrupt (observed, on an
+EasyCAP 002, with test builds of [OpenSMI21](../fw/README.md)): it clears
+I on entry, handlers never nest, and an interrupt that is pending when
+`SEI`, `RETI` or an `OUT` to SREG sets I is taken after the instruction
+that follows. The USB controller's request outlasts a short handler:
+interrupts come in bursts of two or three, with one instruction of the
+interrupted program between them.
+
+With interrupts enabled, the test firmware first failed with every handler
+tried on vector 11, while the same firmware polling the controller worked
+(observed):
+
+| Handler on vector 11 | Result |
+|----------------------|--------|
+| the event handling of [Interrupt](#interrupt), in C | through an enumeration at best, then fails within a few control transfers |
+| reads 0x1503, 0x1502, 0x151c and 0x1518 and counts, in C or in assembly | as above |
+| a bare `RETI`; counts in SRAM only; reads 0x1503 only; reads 0x1502 only | does not get through an enumeration |
+| reads 0x1503 and 0x1502, with its registers saved to fixed SRAM instead of the stack | does not get through an enumeration |
+| what the original handler does, also without the stack: on a setup packet, withdraws the pending packet, flags it and clears 0x1502 bit 4 | does not get through an enumeration |
+
+Before failing, the firmware was found running code it can only have
+jumped to, such as a census handler of another vector with I set. Two
+faults of the core explain these failures. With both worked around, the
+same firmware runs with interrupts enabled (observed, see below).
+
+**An interrupt that starts on a `PUSH` loses its return address.** The
+core moves SP down by two, as for any interrupt, but writes neither byte
+of the return address, and the handler's `RETI` jumps to whatever the two
+bytes held before (observed). The test: a window of the main loop enables
+interrupts with a `SEI` directly in front of one instruction, while an
+interrupt is pending, so that the interrupt is taken on exactly that
+instruction; the stack below is filled with 0xff first. On a `PUSH`, the
+handler found 0xffff instead of a return address 22 times out of 22. The
+same test with each of these instructions found the right return address,
+the right SP afterwards and the handler entered every time, 10 to 14
+interrupts each:
+
+| Instructions an interrupt may start on |
+|----------------------------------------|
+| `NOP`, `POP`, `RCALL`, `CALL` (its own return address undamaged), `RET` (as `SEI; RET`), `RJMP`, `JMP`, `BREQ` taken, `SBRS` skipping one and two words |
+| `LDS`/`STS` of SRAM, `LDS` of 0x1503, `STS` into the i2c buffer at 0x17a0, `LD`/`ST` through X, `LDD`/`STD` through Y, `LD` of 0x1503 through Z |
+| `LPM`, `ELPM`, `ADIW`, `SBIW`, `SBI`/`CBI` on an I/O register |
+
+`CLI` and an `OUT` to SREG that clears I are never interrupted: `SEI`
+directly followed by either, with an interrupt pending, took none in 250
+tries each, so `CLI` protects the instruction after it (observed).
+
+As the handler returns with an interrupt still requested, the one
+instruction it runs before the next interrupt of a burst is where the
+next one is taken. If that instruction is a `PUSH`, as in the prologue of
+nearly every function avr-gcc writes, the return address is lost. That
+happened in the earlier runs: interrupts that returned to the first `PUSH`
+of a function were followed by one whose return address was stale.
+
+**About one interrupt in 4000 enters the reset vector instead of vector
+11.** It arrives there with I clear and the return address pushed, which
+looks like a restart (observed). With every `PUSH` protected, the firmware
+still restarted by itself, after some hundred to a few thousand control
+transfers, each time with SP 0x0fe4 at the reset vector: the SP of the
+main loop's function (0x0fe6) less the two bytes of a return address. A
+check at the reset vector that treated such an entry as vector 11 found
+46 of them in 191608 interrupts, each with I clear, SP 0x0fe4 and the
+return address on the stack pointing right after the call that enabled
+interrupts again in the main loop. Every one of them was the interrupt that
+had waited while the main loop had interrupts disabled, and was taken right
+after `SEI; RET`; it is not known why only that one.
+
+**Cause (inferred).** The core appears to be the AVR Core of opencores.org,
+see [CPU core](#cpu-core-1) under the comparison. In its 2006 sources, an
+interrupt starts in the first cycle of any instruction that isn't marked
+busy (`cpu_busy`), and `PUSH` and `POP` were only added to that list in
+2005 ("cpu_busy(push/pop) + irq bug was fixed 14.07.05"). Without them in
+the list, an interrupt that starts on a `PUSH` writes nothing: the RAM write
+enable that the `PUSH` set is cleared at the end of the `PUSH`'s second
+cycle, which is the cycle in which the interrupt asks for it, and the
+interrupt's later cycles don't ask again. `POP` doesn't write and is
+harmless, as observed. The vector address comes from a priority encoder
+over the request lines, which gives 0x0000, the reset vector, when no line
+is active. The 2006 sources latch it in the cycle the interrupt starts; a
+version that takes it a cycle later enters the reset vector if the
+request ends in that cycle. This was not checked against an older version
+of the sources, which were not available.
+
+**The original firmware** meets neither fault as far as its code shows: its
+compiler keeps saved registers on a software stack, so the image has no
+`PUSH` or `POP`, and it never uses `CLI`. Whether it ever enters the
+reset vector from an interrupt is not known.
+
+**For a replacement**, polling with interrupts disabled avoids both. One
+that enables interrupts has to:
+
+- never let an interrupt start on a `PUSH`: with avr-gcc, put every run of
+  `PUSH`es (and `rcall .`, which it uses to make room on the stack)
+  between `CLI` and an `OUT` that restores SREG, as OpenSMI21's
+  `pushguard.awk` does to the compiler's assembly;
+- take an entry at the reset vector with I clear, its own state intact
+  (OpenSMI21 checks a magic number in SRAM that only it writes, and that
+  SP is in its stack) and a return address into its program on top of the
+  stack for an interrupt, and enter vector 11's handler, which returns
+  there. The check must not push anything before it knows SP is its own:
+  coming from the bootloader, SP points elsewhere.
+
+With both, OpenSMI21 built with `IRQ=1` ran 25000 control requests of
+five kinds, then 40000 more of four kinds in turn, without a restart
+(observed), with 191608 interrupts taken.
 
 ### Data space
 
@@ -216,7 +292,10 @@ on an EasyCAP 002). The first read at 0x1000 did so, and so did a read of 30
 bytes from 0x1600, while 0x1600 and 0x1605 on their own read fine, so not
 even the blocks of known registers are decoded throughout; 0x1580–0x15bf
 reads fine. A firmware, or a host, must only read addresses known to
-exist. This rules out searching the data space for program memory or the
+exist. That fits a core that stretches each access to the data space
+until the addressed block answers, as the AVR Core of opencores.org does
+with its `cpuwait` input (inferred, see [CPU core](#cpu-core-1) under the
+comparison). This rules out searching the data space for program memory or the
 bootloader from the host.
 
 The host can read and write the whole data space with
@@ -380,16 +459,19 @@ up to four times in a row, once for each code it compares, and the later
 comparisons could never match if the first read had cleared it. Nothing
 writes it either. So it presumably holds the code of the last event until
 the next one (inferred); a setup packet is told apart from a stale code by
-0x1502 bit 4, which the handler clears.
+0x1502 bit 4, which the handler clears. Read twice in a row on a setup
+packet, by a test firmware, 0x1503 and 0x1502 each gave the same value
+both times (observed, on an EasyCAP 002).
 
 ### Interrupt
 
 Vector 11 goes to the event handler, and the main loop also calls the
 same handler at the start of every pass, so both images poll the
-controller and work whether the interrupt fires or not. A replacement
-should poll as well: whether the controller raises vector 11 at all is
-not known. The handler reads the event code from 0x1503, records the event
-for the main loop and returns:
+controller and work whether the interrupt fires or not. The controller
+does raise vector 11, about once per USB event and in bursts (observed, see
+[Interrupt faults](#interrupt-faults)). A replacement can poll as well,
+which avoids the faults of the core described there. The handler reads the
+event code from 0x1503, records the event for the main loop and returns:
 
 | Code | Event | What the firmware does |
 |------|-------|-------------------------|
@@ -690,6 +772,29 @@ have drivers in Linux, including drivers removed from it, U-Boot and Zephyr
 were compared with the blocks described here: first by searching for
 register names at matching offsets, then by reading the candidates.
 
+### CPU core
+
+The core presumably is the "AVR Core" by Ruslan Lepetenok, published on
+opencores.org from 2001, which is compatible with the ATmega103
+(inferred). Its published versions are a VHDL one of 2006 and a Verilog
+one of 2012; the core in the SMI2021 is apparently older than the one of
+2006. What fits:
+
+- it implements the ATmega103's instruction set; the later versions add
+  the other instructions, which this core doesn't execute (see [CPU
+  core](#cpu-core));
+- its data space accesses wait on a `cpuwait` signal from the addressed
+  block, which would explain why a read of an address that nothing answers
+  stops the firmware for good (see [Data space](#data-space));
+- its history names a bug fixed in 2005 that, by its sources, has exactly
+  the effect seen in the first of the [Interrupt
+  faults](#interrupt-faults), and its way of forming the vector address
+  explains the second one if an older version takes it a cycle later.
+
+The peripherals that come with it were not compared with the ATmega103
+peripherals found here. Its SMBus module, which keeps the registers of
+Atmel's TWI in the I/O space, has nothing in common with the I2C engines.
+
 ### I2C engines
 
 No controller has the same layout. The closest relatives share single
@@ -724,8 +829,8 @@ with a buffer address, a length and a ready bit (Aspeed).
 
 ### Conclusion
 
-Apart from the ATmega103 core and its peripherals, the bridge is Somagic's
-own design, or licensed from a vendor whose controllers have no open
+Apart from the ATmega103 core, presumably the AVR Core of opencores.org,
+and its peripherals, the bridge is Somagic's own design, or licensed from a vendor whose controllers have no open
 source driver. A replacement firmware can reuse AVR libraries for the
 core, but needs its own code for everything above 0x1000.
 
@@ -818,13 +923,20 @@ November 2026:
 10. Install handlers on all vectors to find which interrupts exist, and
     check whether the USB interrupt is really vector 11 only. **Done** as
     far as it goes: only 0x002c is taken, see [Program
-    memory](#program-memory). Why enabling the interrupt makes the test
-    firmware fail is open.
+    memory](#program-memory). Why enabling the interrupt made the test
+    firmware fail is item 12.
 11. Measure the CPU clock with a loop of known length against the USB
     frame timing or a GPIO toggled into a scope. **Done**: a loop of 5 × 10⁷
     cycles took 1333.29 ms longer than one of 10⁷, timed by the host
     through the request it ran in, so 4 × 10⁷ cycles take 1333.29 ms, a CPU
     clock of 30.000 MHz, see [Clock](#clock).
+12. Find why the test firmware fails with interrupts enabled: with
+    interrupts enabled for one instruction at a time, record what each
+    interrupt finds on the stack, and with the firmware's own interrupt
+    handling, where it restarts. **Done**: two faults of the core, an
+    interrupt that starts on a `PUSH` and an interrupt that enters the
+    reset vector; with both worked around, the firmware runs with
+    interrupts enabled, see [Interrupt faults](#interrupt-faults).
 
 ## Sources
 
@@ -843,3 +955,8 @@ November 2026:
 - The drivers in Linux (as of October 2026, and removed ones from its
   history), U-Boot and Zephyr named in [Comparison with known
   controllers](#comparison-with-known-controllers).
+- The AVR Core of opencores.org, <https://opencores.org/projects/avr_core>,
+  as mirrored by FreeCores: the Verilog version 14 of 2012 in
+  <https://github.com/freecores/avr_core>, and the VHDL `pm_fetch_dec.vhd`
+  version 2.6 of 2006 in `rtl/rtl_orig` of
+  <https://github.com/freecores/avr_hp>.
