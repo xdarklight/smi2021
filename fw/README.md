@@ -259,9 +259,10 @@ following:
 14. **PC0** is driven low by clearing `PORTC` bit 0 before setting `DDRC`
     bit 0, so it never glitches high.
 15. **Descriptors not given by the documents**: device class 0 (class per
-    interface), bus powered, 500 mA, no remote wakeup, isochronous
-    endpoints without synchronization (`bmAttributes` 0x01), `bInterval` 1,
-    language 0x0409.
+    interface), bus powered, no remote wakeup, isochronous endpoints
+    without synchronization (`bmAttributes` 0x01), `bInterval` 1, language
+    0x0409. The power value, 500 mA, was chosen the same way, and is what
+    the vendor firmware reports as well.
 16. **Requests without data**: an OUT vendor request without a data stage
     is acknowledged without doing anything; an IN request with `wLength` 0
     gets a zero length packet.
@@ -665,5 +666,6 @@ Points most likely to need attention next:
   vendor firmware; if streaming fails to restart, try `ALT0_STOP=0`.
 - **Timing request** keeps interrupts off for 1000 × N cycles, up to about
   2.2 s at 30 MHz; a bus reset during it is handled late.
-- **Descriptors**: the power value (500 mA) and the other fields the
-  documents don't give are guesses that should not matter to the host.
+- **Descriptors**: the fields the documents don't give are guesses that
+  should not matter to the host; the power value, 500 mA, matches the
+  vendor firmware's.
