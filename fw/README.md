@@ -253,6 +253,19 @@ following:
     gets a zero length packet.
 17. **Interrupts** stay disabled by default (`IRQ=0`): it needs nothing
     of the core's faults taken care of, and has been tested the longest.
+    Functionally the two are the same. `IRQ=1` only records an event
+    earlier: in vector 11 as it arrives, where `IRQ=0` reads 0x1503 on
+    every pass of the main loop, a few microseconds apart when idle, and
+    in every wait of the control endpoint. Either way the main loop
+    handles the event, so the host sees the same: 4000 control transfers
+    take 1.4 s with either, and both pass the same tests with the Linux
+    driver. The one case where `IRQ=1` records an event much earlier is a
+    wait that doesn't poll the controller, that of an i2c engine (up to
+    some 20 ms per try); the event is still handled after it. `IRQ=1`
+    costs some 380 bytes and the workarounds of [Building](#building). It
+    is there for what may need it later: a main loop that sleeps while
+    idle, or work that takes long, such as decoding an IR remote, during
+    which events are still recorded.
 
 ## Debugging
 
