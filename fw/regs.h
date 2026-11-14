@@ -33,7 +33,8 @@
 #define USB_STATUS_SETUP	_BV(4)
 #define USB_EVENT	REG8(0x1503)
 #define USB_ADDR	REG8(0x1504)
-#define USB_IRQ_CFG	REG8(0x1507)	/* 0xc4 at start, meaning unknown */
+#define USB_IRQ_CFG	REG8(0x1507)
+#define USB_IRQ_CFG_INIT	0xc4	/* at start, meaning unknown */
 #define USB_TESTMODE	REG8(0x1509)	/* inferred, unused */
 
 #define USB_EVT_SETUP		0x01
@@ -44,6 +45,7 @@
 /* Control endpoint */
 #define EP0_CTRL	REG8(0x1510)
 #define EP0_CFG		REG8(0x1511)
+#define EP0_CFG_INIT		0x03	/* at start, meaning unknown */
 #define EP0_MPS_A	REG8(0x1513)
 #define EP0_MPS_B	REG8(0x1515)
 #define EP0_RX_LEN	REG8(0x1517)
@@ -81,16 +83,23 @@
 
 /* Streaming engines */
 #define ENG_MODE3	REG8(0x1580)
+#define ENG_MODE3_INIT		0x03	/* on the mode request */
 #define ENG_MODE3_ON		_BV(7)
 #define STREAM_CTRL	REG8(0x1600)
 #define STREAM_CTRL_ON		_BV(7)
 #define AUDIO_CTRL	REG8(0x1740)
+#define AUDIO_CTRL_START	(_BV(2) | _BV(0))
 #define VIDEO_CTRL	REG8(0x1800)
-#define STREAM_SRC	REG8(0x1880)
+#define VIDEO_CTRL_START	(_BV(3) | _BV(2) | _BV(0))
+#define STREAM_SRC	REG8(0x1880)	/* by mode, docs/protocol.md "Modes" */
+#define STREAM_SRC_AUDIO_TS	0	/* modes 2 and 3 */
+#define STREAM_SRC_CAPTURE	1	/* mode 5 */
+#define STREAM_SRC_MODE4	2
 #define SYS_CTRL	REG8(0x3080)
 #define SYS_CTRL_REQ_FB		_BV(7)	/* cleared by request 0xfb, purpose unknown */
 #define SYS_CTRL_SUSPEND	_BV(4)
 #define ENG_MODE4	REG8(0x3100)
+#define ENG_MODE4_ON		1
 
 /* I2C engines */
 #define I2C0_BASE	0x1780

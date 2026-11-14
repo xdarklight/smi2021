@@ -39,6 +39,21 @@
 #define DT_STRING		3
 #define DT_QUALIFIER		6
 #define DT_OTHER_SPEED		7
+#define DT_INTERFACE		4
+#define DT_ENDPOINT		5
+
+#define CLASS_VENDOR		0xff
+#define EP_TYPE_ISOC		0x01
+#define LANGID_EN_US		0x0409
+
+/* Sizes of the isochronous packets, at full and at high speed */
+#define ISO_MPS_FS		0x03ff
+#define ISO_MPS_HS		0x0400
+/* ISO_MPS_HS three times per microframe */
+#define ISO_MPS_HS_3X		((2 << 11) | ISO_MPS_HS)
+
+/* No SET_ADDRESS to apply after the status stage */
+#define NO_ADDR			0xff
 
 #define FEAT_ENDPOINT_HALT	0
 
@@ -91,19 +106,20 @@ static const uint8_t qual_desc[10] PROGMEM = {
 	250			/* 500 mA */
 
 #define INTERFACE(alt, neps) \
-	9, 4, 0, (alt), (neps), 0xff, 0xff, 0xff, 0
+	9, DT_INTERFACE, 0, (alt), (neps), \
+	CLASS_VENDOR, CLASS_VENDOR, CLASS_VENDOR, 0
 
 #define ISO_IN_EP(mps) \
-	7, 5, STREAM_EP, 0x01, LE16(mps), 1
+	7, DT_ENDPOINT, STREAM_EP, EP_TYPE_ISOC, LE16(mps), 1
 
 /* High speed: 1023 bytes and 3 x 1024 bytes per microframe */
 static const uint8_t cfg_hs[CFG_LEN] PROGMEM = {
 	CONFIG_HEAD,
 	INTERFACE(0, 0),
 	INTERFACE(1, 1),
-	ISO_IN_EP(0x03ff),
+	ISO_IN_EP(ISO_MPS_FS),
 	INTERFACE(2, 1),
-	ISO_IN_EP(0x1400),
+	ISO_IN_EP(ISO_MPS_HS_3X),
 };
 
 /* Full speed: 1023 bytes per frame for both alternate settings */
@@ -111,9 +127,9 @@ static const uint8_t cfg_fs[CFG_LEN] PROGMEM = {
 	CONFIG_HEAD,
 	INTERFACE(0, 0),
 	INTERFACE(1, 1),
-	ISO_IN_EP(0x03ff),
+	ISO_IN_EP(ISO_MPS_FS),
 	INTERFACE(2, 1),
-	ISO_IN_EP(0x03ff),
+	ISO_IN_EP(ISO_MPS_FS),
 };
 
 /*
@@ -333,7 +349,9 @@ static void block_set_state(uint16_t base, uint8_t state)
  */
 static uint16_t ep82_block(void)
 {
-	return (cur_mode == 2 || cur_mode == 4) ? EPA_BASE : EPB_BASE;
+	if (cur_mode == MODE_AUDIO || cur_mode == MODE_4)
+		return EPA_BASE;
+	return EPB_BASE;
 }
 
 static void set_block_mps(uint16_t mps)
@@ -377,8 +395,8 @@ static uint8_t get_descriptor(const struct setup *s, uint16_t *len)
 		case 0:
 			xbuf[0] = 4;
 			xbuf[1] = DT_STRING;
-			xbuf[2] = 0x09;		/* English (United States) */
-			xbuf[3] = 0x04;
+			xbuf[2] = LANGID_EN_US & 0xff;
+			xbuf[3] = LANGID_EN_US >> 8;
 			*len = 4;
 			return 0;
 		case 1:
@@ -513,7 +531,7 @@ static void handle_setup(void)
 {
 	uint8_t *raw;
 	struct setup s;
-	uint8_t type, chunk, got, err, addr = 0xff;
+	uint8_t type, chunk, got, err, addr = NO_ADDR;
 	uint16_t len = 0, off;
 
 	while (!(EP0_RX_STAT & EP_FULL))
@@ -583,7 +601,7 @@ static void handle_setup(void)
 	if (!ep0_tx(xbuf, 0))
 		return;
 
-	if (addr != 0xff) {
+	if (addr != NO_ADDR) {
 		/* the controller does not delay the change of address */
 		if (!ep0_wait_tx_idle())
 			return;
@@ -604,7 +622,7 @@ static void handle_reset(void)
 
 static void handle_speed(void)
 {
-	set_block_mps((USB_SPEED & USB_SPEED_HIGH) ? 0x0400 : 0x03ff);
+	set_block_mps((USB_SPEED & USB_SPEED_HIGH) ? ISO_MPS_HS : ISO_MPS_FS);
 }
 
 static void handle_suspend(void)
@@ -655,11 +673,11 @@ void usb_poll(void)
 /* docs/hardware.md "Startup", step 5 */
 void usb_init(void)
 {
-	USB_IRQ_CFG = 0xc4;
-	EP0_CFG = 0x03;
+	USB_IRQ_CFG = USB_IRQ_CFG_INIT;
+	EP0_CFG = EP0_CFG_INIT;
 	EP0_CTRL &= ~EP_STATE_MASK;
-	EP0_MPS_A = 0x40;
-	EP0_MPS_B = 0x40;
+	EP0_MPS_A = EP0_MPS;
+	EP0_MPS_B = EP0_MPS;
 	EP0_RX_ADDR_L = EP0_RX_BUF & 0xff;
 	EP0_RX_ADDR_H = EP0_RX_BUF >> 8;
 	EP0_TX_ADDR_L = EP0_TX_BUF & 0xff;
@@ -667,13 +685,13 @@ void usb_init(void)
 
 	EPX_CFG(EPA_BASE) = EPX_CFG_EP81;
 	block_set_state(EPA_BASE, EP_STATE_NORMAL);
-	EPX_MPS_L(EPA_BASE) = 0xff;
-	EPX_MPS_H(EPA_BASE) = 0x03;
+	EPX_MPS_L(EPA_BASE) = ISO_MPS_FS & 0xff;
+	EPX_MPS_H(EPA_BASE) = ISO_MPS_FS >> 8;
 
 	EPX_CFG(EPB_BASE) = EPX_CFG_EP82;
 	block_set_state(EPB_BASE, EP_STATE_NORMAL);
-	EPX_MPS_L(EPB_BASE) = 0xff;
-	EPX_MPS_H(EPB_BASE) = 0x03;
+	EPX_MPS_L(EPB_BASE) = ISO_MPS_FS & 0xff;
+	EPX_MPS_H(EPB_BASE) = ISO_MPS_FS >> 8;
 
 	/* drive PC0 low without a glitch: port first, then direction */
 	PORTC &= ~_BV(PC0);

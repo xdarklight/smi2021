@@ -11,7 +11,23 @@
 #include "fw.h"
 #include "regs.h"
 
+/* All IN vendor requests have this bRequest */
+#define VENDOR_REQUEST		0x01
+
+/* Heads, in the first byte of a request and of the reply */
 #define MODE_HEAD		0x01
+/* the reply to a register access, with 8, 16 or 32 data bytes */
+#define REG_REPLY_8		0x0b
+#define REG_REPLY_16		0x0c
+#define REG_REPLY_32		0x0d
+#define HEAD_SYS_CLEAR		0xfb	/* clears SYS_CTRL_REQ_FB */
+
+/* A register access request: offsets of its fields */
+#define MSG_I2C_ADDR		1
+#define MSG_CMD			2
+#define MSG_FLAGS		3
+#define MSG_SIZE		4
+#define MSG_DATA		5	/* the address bytes, then the data */
 
 #define FLAG_NADDR		0x0f
 #define FLAG_INFO		0x10
@@ -19,8 +35,12 @@
 #define FLAG_BRIDGE		0x80
 #define CMD_READ		0x20
 #define CMD_FAILED		0x01
+/* Bits 7-6 of the command: with or without a subaddress */
+#define CMD_ADDR_MASK		0xc0
+#define CMD_NO_SUBADDR		0x80
+#define CMD_SUBADDR		0xc0
 
-/* Address and data bytes that the largest reply (wValue 0x0d) holds */
+/* Address and data bytes that the largest reply (REG_REPLY_32) holds */
 #define REPLY_DATA		32
 /* Largest i2c transfer: the buffer at +5 to +0x24 of the engine (inferred) */
 #define I2C_MAX			32
@@ -29,7 +49,7 @@
 /* Polls of the status register, some 20 ms at 30 MHz */
 #define I2C_TIMEOUT		50000u
 
-uint8_t cur_mode = 3;
+uint8_t cur_mode = MODE_TS;
 static uint8_t started_mode;
 
 /*
@@ -49,8 +69,8 @@ uint8_t infoblock[16] __attribute__((section(".infoblock"), used)) = {
 /* docs/hardware.md "Startup", step 4: mode 3 is the initial mode */
 void stream_init(void)
 {
-	ENG_MODE3 = 0x03;
-	STREAM_SRC = 0x00;
+	ENG_MODE3 = ENG_MODE3_INIT;
+	STREAM_SRC = STREAM_SRC_AUDIO_TS;
 }
 
 static void set_block(uint16_t base, uint8_t cfg, uint8_t state)
@@ -64,13 +84,13 @@ static uint8_t set_mode(uint8_t mode)
 	uint16_t on, off;
 
 	switch (mode) {
-	case 2:
-	case 4:
+	case MODE_AUDIO:
+	case MODE_4:
 		on = EPA_BASE;
 		off = EPB_BASE;
 		break;
-	case 3:
-	case 5:
+	case MODE_TS:
+	case MODE_CAPTURE:
 		on = EPB_BASE;
 		off = EPA_BASE;
 		break;
@@ -84,22 +104,22 @@ static uint8_t set_mode(uint8_t mode)
 	EPB_REG12 = 0;
 
 	switch (mode) {
-	case 2:
+	case MODE_AUDIO:
 		AUDIO_CTRL = 0;
-		STREAM_SRC = 0;
+		STREAM_SRC = STREAM_SRC_AUDIO_TS;
 		break;
-	case 3:
-		ENG_MODE3 = 0x03;
-		STREAM_SRC = 0;
+	case MODE_TS:
+		ENG_MODE3 = ENG_MODE3_INIT;
+		STREAM_SRC = STREAM_SRC_AUDIO_TS;
 		break;
-	case 4:
+	case MODE_4:
 		ENG_MODE4 = 0;
-		STREAM_SRC = 2;
+		STREAM_SRC = STREAM_SRC_MODE4;
 		break;
-	case 5:
+	case MODE_CAPTURE:
 		VIDEO_CTRL = 0;
 		AUDIO_CTRL = 0;
-		STREAM_SRC = 1;
+		STREAM_SRC = STREAM_SRC_CAPTURE;
 		break;
 	}
 
@@ -112,18 +132,18 @@ static uint8_t set_mode(uint8_t mode)
 void stream_start(void)
 {
 	switch (cur_mode) {
-	case 2:
-		AUDIO_CTRL |= 0x05;
+	case MODE_AUDIO:
+		AUDIO_CTRL |= AUDIO_CTRL_START;
 		break;
-	case 3:
+	case MODE_TS:
 		ENG_MODE3 |= ENG_MODE3_ON;
 		break;
-	case 4:
-		ENG_MODE4 = 1;
+	case MODE_4:
+		ENG_MODE4 = ENG_MODE4_ON;
 		break;
-	case 5:
-		VIDEO_CTRL |= 0x0d;
-		AUDIO_CTRL |= 0x05;
+	case MODE_CAPTURE:
+		VIDEO_CTRL |= VIDEO_CTRL_START;
+		AUDIO_CTRL |= AUDIO_CTRL_START;
 		break;
 	}
 	STREAM_CTRL |= STREAM_CTRL_ON;
@@ -139,18 +159,18 @@ void stream_stop(void)
 {
 #if FW_ALT0_STOP
 	switch (started_mode) {
-	case 2:
-		AUDIO_CTRL &= ~0x05;
+	case MODE_AUDIO:
+		AUDIO_CTRL &= ~AUDIO_CTRL_START;
 		break;
-	case 3:
+	case MODE_TS:
 		ENG_MODE3 &= ~ENG_MODE3_ON;
 		break;
-	case 4:
+	case MODE_4:
 		ENG_MODE4 = 0;
 		break;
-	case 5:
-		VIDEO_CTRL &= ~0x0d;
-		AUDIO_CTRL &= ~0x05;
+	case MODE_CAPTURE:
+		VIDEO_CTRL &= ~VIDEO_CTRL_START;
+		AUDIO_CTRL &= ~AUDIO_CTRL_START;
 		break;
 	}
 	if (started_mode)
@@ -207,22 +227,22 @@ static uint8_t i2c_xfer(uint16_t base, uint8_t slave, uint8_t cmd,
 
 static uint8_t reg_access(uint16_t len)
 {
-	const uint8_t *p = xbuf + 5;
+	const uint8_t *p = xbuf + MSG_DATA;
 	uint8_t *data = reply + 4;
 	uint8_t cmd, flags, size, naddr, i, n;
 	uint16_t addr;
 
-	if (len < 5)
+	if (len < MSG_DATA)
 		return 1;
 
-	cmd = xbuf[2];
-	flags = xbuf[3];
-	size = xbuf[4];
+	cmd = xbuf[MSG_CMD];
+	flags = xbuf[MSG_FLAGS];
+	size = xbuf[MSG_SIZE];
 	naddr = flags & FLAG_NADDR;
 
 	if (flags & FLAG_INFO) {
 		for (i = 0; i < 4; i++)
-			reply[i] = xbuf[1 + i];
+			reply[i] = xbuf[MSG_I2C_ADDR + i];
 		for (i = 0; i < REPLY_DATA; i++)
 			data[i] = i < sizeof(infoblock) ? infoblock[i] : 0;
 		return 0;
@@ -231,23 +251,23 @@ static uint8_t reg_access(uint16_t len)
 	/* the checks of docs/protocol.md "Register access requests" */
 	if ((flags & FLAG_BRIDGE) && naddr != 2)
 		return 1;
-	if ((cmd & 0xc0) == 0x80 && naddr != 0)
+	if ((cmd & CMD_ADDR_MASK) == CMD_NO_SUBADDR && naddr != 0)
 		return 1;
-	if ((cmd & 0xc0) == 0xc0 && naddr != 1)
+	if ((cmd & CMD_ADDR_MASK) == CMD_SUBADDR && naddr != 1)
 		return 1;
 
 	/* and bounds: a read must fit the reply, a write the request */
 	if (cmd & CMD_READ) {
 		if (naddr + size > REPLY_DATA)
 			return 1;
-	} else if ((uint16_t)(5 + naddr + size) > len) {
+	} else if ((uint16_t)(MSG_DATA + naddr + size) > len) {
 		return 1;
 	}
 	if (!(flags & FLAG_BRIDGE) && size > I2C_MAX)
 		return 1;
 
 	for (i = 0; i < 4; i++)
-		reply[i] = xbuf[1 + i];
+		reply[i] = xbuf[MSG_I2C_ADDR + i];
 	for (i = 0; i < REPLY_DATA; i++)
 		data[i] = i < naddr ? p[i] : 0;
 
@@ -268,7 +288,8 @@ static uint8_t reg_access(uint16_t len)
 		return 0;
 	}
 
-	if (i2c_xfer((flags & FLAG_BUS1) ? I2C1_BASE : I2C0_BASE, xbuf[1], cmd,
+	if (i2c_xfer((flags & FLAG_BUS1) ? I2C1_BASE : I2C0_BASE,
+		     xbuf[MSG_I2C_ADDR], cmd,
 		     p[0], p + naddr, size, data + naddr))
 		reply[1] |= CMD_FAILED;
 
@@ -296,7 +317,7 @@ uint8_t vendor_in(const struct setup *s, uint16_t *len)
 	uint8_t v = s->wValue & 0xff;
 	uint8_t i, n;
 
-	if (s->bRequest != 0x01)
+	if (s->bRequest != VENDOR_REQUEST)
 		return 1;
 
 	xbuf[0] = v;
@@ -306,20 +327,20 @@ uint8_t vendor_in(const struct setup *s, uint16_t *len)
 		xbuf[1] = cur_mode;
 		*len = 2;
 		return 0;
-	case 0xfb:
+	case HEAD_SYS_CLEAR:
 		SYS_CTRL &= ~SYS_CTRL_REQ_FB;
-		xbuf[1] = 0x01;
+		xbuf[1] = 0x01;	/* as the original; meaning unknown */
 		*len = 2;
 		return 0;
-	/* the reply to the last register access, of 13, 21 or 37 bytes */
-	case 0x0b:
-		n = 13;
+	/* the reply to the last register access, cut after 8, 16 or 32 bytes */
+	case REG_REPLY_8:
+		n = MSG_DATA + 8;
 		break;
-	case 0x0c:
-		n = 21;
+	case REG_REPLY_16:
+		n = MSG_DATA + 16;
 		break;
-	case 0x0d:
-		n = 37;
+	case REG_REPLY_32:
+		n = MSG_DATA + 32;
 		break;
 	default:
 		return 1;
