@@ -189,9 +189,19 @@ static void usb_check_events(void)
 volatile struct irq_record irqrec;
 
 #if FW_ISR_BARE != 1 && FW_ISR_BARE != 5 && FW_ISR_BARE != 6 && \
-	FW_ISR_BARE != 7
-void __vector_11(void) __attribute__((signal, used, externally_visible));
-void __vector_11(void)
+	FW_ISR_BARE != 7 && FW_ISR_BARE != 9
+#if FW_ISR_BARE == 10
+/*
+ * Interrupt test: vector 11 in isr.S notes its return address and jumps
+ * here; __vector_24 is no vector of the table, the name only makes avr-gcc
+ * build an interrupt handler (and pushguard.awk leave it alone)
+ */
+#define USB_ISR	__vector_24
+#else
+#define USB_ISR	__vector_11
+#endif
+void USB_ISR(void) __attribute__((signal, used, externally_visible));
+void USB_ISR(void)
 {
 	uint8_t n = irqrec.n;
 
@@ -672,6 +682,10 @@ void usb_poll(void)
 	ev = usb_events;
 	usb_events = 0;
 	irq_on();
+
+#if FW_ISR_BARE == 9
+	irq_window_pass();
+#endif
 
 	if (ev & EV_RESET)
 		handle_reset();

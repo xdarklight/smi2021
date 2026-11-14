@@ -21,7 +21,7 @@ volatile uint8_t irq_last = 0xff;
 
 /* Kept across a jump to the reset vector; random after power up */
 uint16_t boot_count __attribute__((section(".noinit")));
-static uint16_t boot_magic __attribute__((section(".noinit")));
+uint16_t boot_magic __attribute__((section(".noinit")));	/* isr.S */
 uint16_t reset_sp __attribute__((section(".noinit")));
 struct dbg_record dbg_now __attribute__((section(".noinit")));
 struct dbg_record dbg_crash;

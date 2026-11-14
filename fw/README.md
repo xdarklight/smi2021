@@ -9,9 +9,10 @@ with it unchanged, and adds test requests for the experiments 8 to 11 of
 [`docs/hardware.md`](../docs/hardware.md#experiments).
 
 > **Partly tested.** On an EasyCAP 002, version 0.1 enumerates at high
-> speed, answers its test requests and ran experiments 8 to 11. Streaming,
-> the register access requests and the Linux driver on top of it have not
-> been tried yet. See [On hardware](#on-hardware).
+> speed, answers its test requests and ran experiments 8 to 12, also with
+> interrupts enabled. Streaming, the register access requests and the Linux
+> driver on top of it have not been tried yet. See [On
+> hardware](#on-hardware).
 
 ## Building
 
@@ -33,19 +34,39 @@ and Ubuntu that is `gcc-avr`, `binutils-avr` and `avr-libc`; on Arch Linux
     make IRQ=1 ISR_BARE=5             # vector 11 records its return address
     make IRQ=1 ISR_BARE=6             # reads 0x1503, 0x1502, no stack
     make IRQ=1 ISR_BARE=7             # does what the original does, no stack
+    make IRQ=1 ISR_BARE=10            # vector 11 records its return address,
+                                      # then runs the C handler
+    make ISR_BARE=9                   # interrupts only in a test window (0xf9)
+    make PUSH_GUARD=0                 # leave avr-gcc's PUSHes unprotected
 
-`IRQ=0`, the default, never enables interrupts and polls the controller,
-as `docs/hardware.md` "Interrupt" advises; with interrupts enabled the
-firmware fails within a few control transfers, for reasons not yet known.
-`ISR_EVENTS` and `ISR_BARE` only matter for the interrupt test, see 0xf3
-and 0xf7 under [Test requests](#test-requests).
+`IRQ=0`, the default, never enables interrupts and polls the controller.
+`IRQ=1` enables them and handles USB events in vector 11 as well. The core
+has two faults that a firmware with interrupts enabled has to work around
+(`docs/hardware.md` "Interrupt faults"), and `IRQ=1` does:
+
+- every run of `PUSH`es that avr-gcc writes, and every `rcall .`, is put
+  between `CLI` and the `OUT` that restores SREG, by `pushguard.awk`,
+  which the build runs on the compiler's assembly (`PUSH_GUARD=1`, the
+  default; with `IRQ=0` it costs a few bytes and is harmless). Interrupt
+  handlers (`__vector_N`) are left alone, as they run with I clear;
+- the startup code takes an entry at the reset vector with I clear,
+  `boot_magic` set, SP in the firmware's stack and a return address into
+  the program on top of the stack for an interrupt that ended up there,
+  counts it (see 0xf8) and enters vector 11's handler instead of
+  restarting.
+
+Without the first, `IRQ=1` fails within a few control transfers; without
+the second, it restarts by itself every few thousand. `ISR_EVENTS` and `ISR_BARE` only matter for the
+interrupt tests, see 0xf3, 0xf7, 0xf8 and 0xf9 under [Test
+requests](#test-requests).
 
 The result is `build/opensmi21.bin`: a plain image from address 0, padded
 with 0xff to a multiple of 62 bytes, as the bootloader takes it. The build
 fails if the image grows beyond 7502 bytes, the largest image known to
 work, though program memory is 8 KB. `make` also runs `check.sh`, see
 [Checks](#checks). Built with avr-gcc 7.3.0 and the defaults, version 0.1
-is 5488 bytes, 5518 padded (89 upload units).
+is 5736 bytes, 5766 padded (93 upload units); with `IRQ=1`, 5958 bytes,
+6014 padded (97 upload units).
 
 To use it with the Linux driver, install it in place of the vendor image:
 
@@ -60,12 +81,14 @@ unloaded:
 
 | File | Contents |
 |------|----------|
-| `isr.S` | handlers of the vectors other than 11, for the census, and the stack pointer at reset for the crash record |
+| `isr.S` | handlers of the vectors other than 11, for the census; the stack pointer at reset for the crash record; with `IRQ=1`, the check for an interrupt that entered the reset vector; the assembly handlers of `ISR_BARE` |
 | `main.c` | bring-up and main loop |
 | `usb.c` | USB controller, control endpoint, standard requests, descriptors |
 | `vendor.c` | vendor requests: modes, streaming engines, register access, i2c |
 | `test.c` | test requests |
-| `asm.S` | delay loops, program memory reads, instruction tests |
+| `asm.S` | delay loops, program memory reads, instruction tests, the interrupt window of `ISR_BARE=9` |
+| `win.h` | layout of the record of the interrupt window, request 0xf9 |
+| `pushguard.awk` | puts avr-gcc's `PUSH`es under `CLI`, see [Building](#building) |
 | `regs.h` | register addresses from `docs/hardware.md` |
 | `fw.h` | shared declarations, version, build options |
 | `opensmi21.ld` | memory layout |
@@ -88,7 +111,8 @@ unloaded:
 - **USB events**: polled, as the original firmware does: the main loop and
   every wait of the control endpoint read 0x1503, which reading doesn't
   acknowledge, and record the event; the main loop handles it. With
-  `IRQ=1`, vector 11 does the same. Setup packet (0x01 with 0x1502 bit 4: the handler
+  `IRQ=1`, vector 11 does the same, and the main loop disables interrupts
+  where it reads or changes what the handler writes. Setup packet (0x01 with 0x1502 bit 4: the handler
   clears the bit and withdraws a pending packet by clearing 0x151c bit 7),
   speed detected (0x80: maximum packet size of blocks A and B 0x0400 at high
   speed, 0x03ff otherwise), bus reset (0x81), suspend (0x85: `PC0` low,
@@ -226,11 +250,14 @@ following:
 16. **Requests without data**: an OUT vendor request without a data stage
     is acknowledged without doing anything; an IN request with `wLength` 0
     gets a zero length packet.
+17. **Interrupts** stay disabled by default (`IRQ=0`): polling is what the
+    original does in effect, and it needs no workaround of the core's
+    faults. `IRQ=1` has been tested with control transfers only.
 
 ## Test requests
 
 All test requests are vendor IN requests to the device: `bmRequestType`
-0xc0, `bRequest` 0xf0 to 0xf8. They don't clash with `bRequest` 0x01 of
+0xc0, `bRequest` 0xf0 to 0xf9. They don't clash with `bRequest` 0x01 of
 the driver and the bootloader, and work in every device state. A reply
 longer than `wLength` is cut to `wLength`. Unknown `bRequest` values from
 0xf0 up are stalled. Multi-byte values are little endian. Nothing writes
@@ -244,17 +271,17 @@ and decodes the reply, for example:
 
 ### 0xf0: identity
 
-`wValue` 0, `wIndex` 0, `wLength` 28.
+`wValue` 0, `wIndex` 0, `wLength` 29.
 
 | Offset | Size | Contents |
 |--------|------|----------|
 | 0 | 9 | "OpenSMI21" |
-| 9 | 1 | version of the test request interface, 2 |
+| 9 | 1 | version of the test request interface, 3 |
 | 10 | 1 | firmware version, major (0) |
 | 11 | 1 | firmware version, minor (1) |
 | 12 | 2 | USB product id |
 | 14 | 2 | image size in bytes, without padding |
-| 16 | 1 | build options: bit 0 `ALT0_STOP`, bit 1 `IRQ`, bit 2 `ISR_EVENTS`, bit 3 `VECTORS=rjmp48` (before avr-libc), bit 4 `ISR_BARE=1`, bit 5 `ISR_BARE=2`, bit 6 `ISR_BARE=3`, bit 7 `ISR_BARE=4`; `ISR_BARE` 5 to 7 have no bit |
+| 16 | 1 | build options: bit 0 `ALT0_STOP`, bit 1 `IRQ`, bit 2 `ISR_EVENTS`, bit 3 `VECTORS=rjmp48` (before avr-libc), bit 4 `ISR_BARE=1`, bit 5 `ISR_BARE=2`, bit 6 `ISR_BARE=3`, bit 7 `ISR_BARE=4`; the other values of `ISR_BARE` are in byte 28 only |
 | 17 | 1 | current mode |
 | 18 | 2 | start counter: number of starts since the counter was last found invalid (see 0xf3) |
 | 20 | 1 | last vector that hit a census stub, 0xff for none |
@@ -263,9 +290,11 @@ and decodes the reply, for example:
 | 23 | 1 | 0x1501 (bit 1: high speed) |
 | 24 | 2 | number of USB events with an unknown code |
 | 26 | 2 | number of times vector 11 was taken, saturating at 0xffff |
+| 28 | 1 | build options: bit 0 `PUSH_GUARD`, bits 7–4 `ISR_BARE` |
 
 Interface version 1, of the firmware before the rename, had "SMIOPEN" in 7
-bytes and so every field 2 bytes earlier, and ended at offset 24.
+bytes and so every field 2 bytes earlier, and ended at offset 24. Version
+2 ended at offset 28 and had no request 0xf9.
 
 ### 0xf1: instruction test (experiment 8)
 
@@ -413,12 +442,14 @@ interrupt that keeps firing leaves the firmware able to report it.
 
 ### 0xf8: return addresses of vector 11
 
-`wValue` 0, `wIndex` 0, `wLength` 200. Filled with `ISR_BARE=5` only.
+`wValue` 0, `wIndex` 0, `wLength` 200, or 206 with `IRQ=1`. The ring is
+filled with `ISR_BARE=5` and `ISR_BARE=10` only.
 
 | Offset | Contents |
 |--------|----------|
 | 0–99 | the record as it was at the last restart without power loss |
 | 100–199 | the record now |
+| 200–205 | `IRQ=1` only: interrupts that entered the reset vector, see [Building](#building): their number (saturating at 255), then for the last one SREG, SP less 3 (low byte first) and the return address on the stack (high byte first, a word address) |
 
 Each record:
 
@@ -435,6 +466,52 @@ and is copied aside at a restart without power loss, before interrupts
 are enabled again. The firmware may hang rather than restart, so it is
 best read over and over while the firmware runs.
 
+### 0xf9: interrupt window (`ISR_BARE=9`)
+
+`wValue` the mode, `wIndex` the number of main loop passes to run the
+window for, `wLength` 282. A build with `ISR_BARE=9` (and `IRQ=0`) never
+enables interrupts except in `irq_window()` in `asm.S`, which the main
+loop runs once per pass while a window is requested: 50 rounds, each of
+which enables interrupts for a few instructions and disables them again.
+Its own handler of vector 11 records what each interrupt finds and returns
+with interrupts disabled whenever it is not inside the window, so that the
+rest of the firmware always runs with them disabled. This is how
+`docs/hardware.md` "Interrupt faults" was found.
+
+With `wIndex` not 0, the request clears the record, sets the mode and
+starts the window, which ends by itself after `wIndex` passes (up to 255).
+With `wIndex` 0 it only reads the record. The reply is the record of
+`win.h`, 280 bytes, and the byte address of `win_first`, the start of the
+window code, 2 bytes.
+
+The low byte of `wValue` (`WMODE_*` in `win.h`): bit 7 runs the window;
+bits 0–2 make the handler read 0x1503, 0x1502, and 0x151c and 0x1518;
+bit 3 closes the window with an `OUT` to SREG instead of `CLI`; bits 4–6
+put three `PUSH`es, three `POP`s, or calls and memory accesses into the
+window, each class opened by its own `SEI`. The high byte (`WMODE2_*`):
+bit 0 makes the window just `SEI` and the closing instruction; bit 7 makes
+it `SEI` and one instruction out of 26, number bits 4–0, of `wi_table` in
+`asm.S`. As the main loop runs with interrupts disabled, an interrupt
+pending when the window opens is taken on the instruction right after its
+`SEI`.
+
+Before each round the window sets the 24 bytes below its stack and `r24`,
+which the handler saves where the next return address would go, to 0xff.
+A return address the core did not write then reads 0xffxx; the handler
+counts it, notes it and returns to `win_lost`, which ends the round. The
+record (`WREC_*`): mode, entries logged, windows run, interrupts taken,
+rounds that ended with SP off and by how much, interrupts taken with the
+window closed and the return address of the last, rounds given up after
+100 interrupts, the window's SP, return addresses not written (count, what
+was found instead, and the word of the window the interrupt before it
+returned to), the second mode byte, the number of times I was found clear
+right after the instruction under test without the handler having run, a
+log of the first 64 interrupts (return address and SP relative to the
+window's) and the number of returns to each of the first 64 words of the
+window. `test-requests.py win` arms the window and decodes the record,
+for example `win 0x97 1 10` (`PUSH`es, one pass, ten times) or
+`win $(( 0x81 << 8 | 0x87 )) 1 10` (instruction 1, `PUSH`).
+
 ## Checks
 
 `check.sh`, run by `make`, checks the output of `avr-objdump -d`:
@@ -449,6 +526,10 @@ best read over and over while the firmware runs.
   bring-up's delay is avr-libc's now;
 - the startup code: the stack pointer saved for the crash record, then
   `SP` set to 0x0fff, `.data` copied with exactly one plain `ELPM`;
+- with `PUSH_GUARD=1`, every `PUSH` and `rcall .` outside the interrupt
+  handlers, the startup code's check for an interrupt that entered the
+  reset vector (which runs with I clear) and the interrupt window follows
+  a `CLI` or another such `PUSH`; it counts them;
 - no `MUL`, `MULS`, `MULSU`, `FMUL*`, `MOVW`, `ELPM` with a register,
   `LPM Rd, Z(+)`, `SPM`, `SLEEP`, `WDR`, `EIJMP`, `EICALL`, `BREAK` or `DES`
   anywhere except the one deliberate instruction in each instruction test
@@ -491,6 +572,13 @@ has read the disassembly of the vendor images, while writing
   corrected (0x1503 is not acknowledged by reading it, and the original
   polls), and following the corrected document.
 
+- the interrupt work (`pushguard.awk`, the check at the reset vector, the
+  interrupt window and its handler, `ISR_BARE=9` and `10`): made from what
+  the device did in tests and from the published sources of the AVR Core
+  of opencores.org, which `docs/hardware.md` identifies as the core; the
+  one fact about the original firmware it relies on, that the image has no
+  `PUSH`, `POP` or `CLI`, is in `docs/hardware.md`.
+
 Where a test on the device needed a fact about the original firmware, the
 fact went into the documents first.
 
@@ -506,15 +594,22 @@ Version 0.1 on an EasyCAP 002, uploaded through the bootloader with
   packet, as it took events from vector 11 alone and read 0x1503 once, as
   the documents then said. Polled as the original firmware does, it
   enumerates at high speed and is configured.
-- **Interrupts**: with interrupts enabled, the firmware fails with every
-  handler tried on vector 11, from a bare `RETI` to one that does what the
-  original handler does without touching the stack (`ISR_BARE=1` to `7`):
-  at best it gets through an enumeration and stops answering within a
-  few control transfers. Only 0x002c is taken, about once per USB event.
-  The core clears I on entry, handlers don't nest, the return addresses
-  are right, and neither the stack frames' SP update nor the use of the
-  stack in the handler is the cause; see `docs/hardware.md` "Program
-  memory". What is, is open; `IRQ=0` is the default.
+- **Interrupts**: with interrupts enabled, the firmware first failed with
+  every handler tried on vector 11, from a bare `RETI` to one that does
+  what the original handler does without touching the stack (`ISR_BARE=1`
+  to `7`): at best it got through an enumeration and stopped answering
+  within a few control transfers. The interrupt window (0xf9) found that an
+  interrupt that starts on a `PUSH` loses its return address, and no other
+  of 26 instructions does. With `pushguard.awk`, the firmware ran, but
+  restarted by itself every few hundred to few thousand control transfers;
+  the return log (0xf8, `ISR_BARE=5` and `10`) and the SP at the restart
+  showed interrupts that had entered the reset vector, about one in 4000.
+  With the check at the reset vector as well, `IRQ=1 ISR_BARE=10` ran 5000
+  requests each of the device and configuration descriptor, identity,
+  event log and program memory read, then `soak 10000`, without a restart:
+  191608 interrupts, 46 of them through the reset vector. The plain
+  `IRQ=1` build, without the return log in front of the handler, has not
+  been run yet. See `docs/hardware.md` "Interrupt faults".
 - **Test requests**: all of them work. Experiments 8 to 11 gave: only the
   plain `ELPM` of the instructions tested works, program memory is 8 KB,
   the CPU clock is 30.000 MHz; see `docs/hardware.md` "Experiments".
@@ -529,7 +624,10 @@ Version 0.1 on an EasyCAP 002, uploaded through the bootloader with
 
 Points most likely to need attention next:
 
-- **Interrupts**: see above; keep `IRQ=0` until it is understood.
+- **Interrupts**: `IRQ=1` works around two faults of the core, and has
+  been tested with control transfers only; why only one particular
+  interrupt enters the reset vector is not known, so there may be other
+  ways to meet it. `IRQ=0` stays the default.
 - **Event handling inferred from the documents**: enumeration works, so
   clearing 0x1502 bit 4 by read-modify-write, the status stage of IN
   transfers that the hardware completes itself and the address change

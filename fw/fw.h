@@ -29,7 +29,7 @@
 #endif
 
 /* Version of the test request interface, see README.md */
-#define TEST_IF_VERSION		2
+#define TEST_IF_VERSION		3
 
 #define SETUP_DIR_IN		0x80
 #define SETUP_TYPE_MASK		0x60
@@ -162,6 +162,19 @@ struct ret_record {
 };
 extern volatile struct ret_record retlog;
 extern struct ret_record retlog_crash;
+
+/* isr.S, IRQ=1: interrupts that ended at the reset vector, see there */
+extern volatile uint8_t vec0_rec[6];
+
+/*
+ * Interrupt window test, ISR_BARE=9, request 0xf9: the record that the
+ * window in asm.S and its handler in isr.S fill, laid out in win.h
+ */
+#include "win.h"
+extern volatile uint8_t wrec[WREC_SIZE];
+void irq_window(void);				/* asm.S */
+void irq_window_pass(void);			/* test.c */
+extern const uint8_t win_first[];		/* asm.S, start of the window */
 
 static inline void irq_on(void)
 {

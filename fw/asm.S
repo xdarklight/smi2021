@@ -14,6 +14,8 @@
  */
 
 #define SREG_IO		0x3f
+#define SPH_IO		0x3e
+#define SPL_IO		0x3d
 #define RAMPZ_IO	0x3b
 
 #define OP_MUL_R18_R19		0x9f23	/* mul r18, r19 */
@@ -219,3 +221,426 @@ insn_movw:
 	ELPM_TEST insn_elpm, OP_ELPM, r0, r18
 	ELPM_TEST insn_elpm_z, OP_ELPM_R18_Z, r18, r0
 	ELPM_TEST insn_elpm_zp, OP_ELPM_R18_ZP, r18, r0
+
+#if FW_ISR_BARE == 9
+#include "win.h"
+
+/*
+ * void irq_window(void), for docs/hardware.md "Experiments", item 12: the
+ * only code of this build that runs with interrupts enabled. WIN_ROUNDS
+ * times, it opens a window on a fixed sequence of instructions, among them
+ * PUSH, POP, RCALL, CALL and RET, and closes it again. The handler of
+ * vector 11 in isr.S logs where each interrupt returns to and what the
+ * stack pointer was there, so that the host sees which instructions an
+ * interrupt may not return to.
+ *
+ * Nothing here relies on the stack: SPL is set anew for every round, to
+ * WIN_REDZONE bytes below the caller's, so that neither a PUSH nor a POP
+ * too many does harm; a round that ends with another SPL is counted. The
+ * stack is nowhere near a multiple of 256 bytes deep, so SPH stays.
+ *
+ * Nor does it rely on CLI: the handler returns with interrupts disabled
+ * when it finds the window closed, and counts that.
+ *
+ * Nor does it rely on the core writing the return address: before every
+ * round, the WIN_FILL bytes below the window's stack are set to 0xff, and
+ * so is r24, which the handler saves where the next return address would
+ * go. A return address the core did not write then reads 0xffxx, outside
+ * the window; the handler counts it and returns to win_lost instead, with
+ * interrupts disabled, which ends the round.
+ */
+	.section .bss
+wscratch:
+	.skip	4
+wysave:
+	.skip	2
+	.text
+	.global	irq_window
+	.global	win_first
+	.global	win_lost
+	.global	win_end
+irq_window:
+	sts	wysave, r28		/* Y is the caller's */
+	sts	wysave + 1, r29
+	ldi	r28, lo8(wscratch)
+	ldi	r29, hi8(wscratch)
+	in	r18, SPL_IO
+	subi	r18, WIN_REDZONE
+	sts	wrec + WREC_BASE, r18
+	lds	r23, wrec + WREC_MODE
+	ldi	r19, WIN_ROUNDS
+	ldi	r22, 1
+	ldi	r26, lo8(wscratch)
+	ldi	r27, hi8(wscratch)
+	rjmp	1f
+win_first:
+win_sub:
+	nop
+	ret
+
+/*
+ * WMODE2_INSN. Each test opens the window with SEI right in front of the
+ * instruction under test, so that a pending interrupt is taken on it,
+ * notes SREG right after it in r21, closes the window and rebalances what
+ * it did to the stack. wi_tail counts a clear I there, which only an
+ * interrupt that didn't reach the handler can cause. A lost return
+ * address ends in win_lost, a wrong SPL is counted by the round's end.
+ * X and Y point to wscratch, r20 is 0xff.
+ */
+wi_start:
+	andi	r21, 0x1f
+	cpi	r21, WIN_INSNS
+	brlo	wi_l1
+	ldi	r21, 0
+wi_l1:	ldi	r30, pm_lo8(wi_table)
+	ldi	r31, pm_hi8(wi_table)
+	add	r30, r21
+	adc	r31, r1
+	ijmp
+wi_table:
+	rjmp	wi_nop
+	rjmp	wi_push
+	rjmp	wi_pop
+	rjmp	wi_rcall
+	rjmp	wi_call
+	rjmp	wi_ret
+	rjmp	wi_lds
+	rjmp	wi_sts
+	rjmp	wi_lds_usb
+	rjmp	wi_sts_i2c
+	rjmp	wi_ld
+	rjmp	wi_st
+	rjmp	wi_ldd
+	rjmp	wi_std
+	rjmp	wi_lpm
+	rjmp	wi_elpm
+	rjmp	wi_adiw
+	rjmp	wi_sbiw
+	rjmp	wi_rjmp
+	rjmp	wi_jmp
+	rjmp	wi_breq
+	rjmp	wi_skip1
+	rjmp	wi_skip2
+	rjmp	wi_sbi
+	rjmp	wi_cbi
+	rjmp	wi_ld_usb
+
+wi_nop:
+	sei
+	nop
+	in	r21, SREG_IO
+	cli
+	rjmp	wi_tail
+wi_push:
+	sei
+	push	r20
+	in	r21, SREG_IO
+	cli
+	pop	r20
+	rjmp	wi_tail
+wi_pop:
+	sei
+	pop	r20
+	in	r21, SREG_IO
+	cli
+	push	r20
+	rjmp	wi_tail
+wi_rcall:
+	ldi	r30, pm_lo8(wi_rcall_ret)
+	ldi	r31, pm_hi8(wi_rcall_ret)
+	sei
+	rcall	wi_csub
+wi_rcall_ret:
+	rjmp	wi_tail
+wi_call:
+	ldi	r30, pm_lo8(wi_call_ret)
+	ldi	r31, pm_hi8(wi_call_ret)
+	sei
+	call	wi_csub
+wi_call_ret:
+	rjmp	wi_tail
+wi_ret:
+	rcall	wi_rsub
+	in	r21, SREG_IO
+	cli
+	rjmp	wi_tail
+wi_lds:
+	sei
+	lds	r20, wscratch
+	in	r21, SREG_IO
+	cli
+	rjmp	wi_tail
+wi_sts:
+	sei
+	sts	wscratch, r20
+	in	r21, SREG_IO
+	cli
+	rjmp	wi_tail
+wi_lds_usb:
+	sei
+	lds	r20, 0x1503
+	in	r21, SREG_IO
+	cli
+	rjmp	wi_tail
+wi_sts_i2c:
+	sei
+	sts	0x17a0, r20		/* first i2c engine, buffer byte 27 */
+	in	r21, SREG_IO
+	cli
+	rjmp	wi_tail
+wi_ld:
+	sei
+	ld	r20, X
+	in	r21, SREG_IO
+	cli
+	rjmp	wi_tail
+wi_st:
+	sei
+	st	X, r20
+	in	r21, SREG_IO
+	cli
+	rjmp	wi_tail
+wi_ldd:
+	sei
+	ldd	r20, Y + 1
+	in	r21, SREG_IO
+	cli
+	rjmp	wi_tail
+wi_std:
+	sei
+	std	Y + 1, r20
+	in	r21, SREG_IO
+	cli
+	rjmp	wi_tail
+wi_lpm:
+	ldi	r30, lo8(insn_pattern)
+	ldi	r31, hi8(insn_pattern)
+	sei
+	lpm
+	in	r21, SREG_IO
+	cli
+	rjmp	wi_tail
+wi_elpm:
+	out	RAMPZ_IO, r1
+	ldi	r30, lo8(insn_pattern)
+	ldi	r31, hi8(insn_pattern)
+	sei
+	.word	OP_ELPM
+	in	r21, SREG_IO
+	cli
+	rjmp	wi_tail
+wi_adiw:
+	sei
+	adiw	r26, 0
+	in	r21, SREG_IO
+	cli
+	rjmp	wi_tail
+wi_sbiw:
+	sei
+	sbiw	r26, 0
+	in	r21, SREG_IO
+	cli
+	rjmp	wi_tail
+wi_rjmp:
+	sei
+	rjmp	wi_l2
+wi_l2:	in	r21, SREG_IO
+	cli
+	rjmp	wi_tail
+wi_jmp:
+	sei
+	jmp	wi_l3
+wi_l3:	in	r21, SREG_IO
+	cli
+	rjmp	wi_tail
+wi_breq:
+	sez
+	sei
+	breq	wi_l4
+wi_l4:	in	r21, SREG_IO
+	cli
+	rjmp	wi_tail
+wi_skip1:
+	sei
+	sbrs	r20, 0			/* r20 is 0xff: skips */
+	nop
+	in	r21, SREG_IO
+	cli
+	rjmp	wi_tail
+wi_skip2:
+	sei
+	sbrs	r20, 0
+	lds	r20, wscratch
+	in	r21, SREG_IO
+	cli
+	rjmp	wi_tail
+wi_sbi:
+	sei
+	sbi	0x09, 0			/* UBRR, unused */
+	in	r21, SREG_IO
+	cli
+	rjmp	wi_tail
+wi_cbi:
+	sei
+	cbi	0x09, 0
+	in	r21, SREG_IO
+	cli
+	rjmp	wi_tail
+wi_ld_usb:
+	ldi	r30, 0x03
+	ldi	r31, 0x15
+	sei
+	ld	r20, Z
+	in	r21, SREG_IO
+	cli
+	rjmp	wi_tail
+
+/*
+ * Called by wi_rcall and wi_call with the return address they expect in
+ * Z: notes SREG, and checks and repairs the return address on the stack,
+ * counting a wrong one as lost
+ */
+wi_csub:
+	in	r21, SREG_IO
+	cli
+	push	r28
+	push	r29
+	in	r28, SPL_IO
+	in	r29, SPH_IO
+	ldd	r20, Y + 3		/* high byte of the return address */
+	cp	r20, r31
+	ldd	r20, Y + 4
+	cpc	r20, r30
+	breq	wi_l5
+	ldd	r20, Y + 3
+	sts	wrec + WREC_LOSTW, r20
+	ldd	r20, Y + 4
+	sts	wrec + WREC_LOSTW + 1, r20
+	lds	r20, wrec + WREC_LOST
+	inc	r20
+	breq	wi_l6
+	sts	wrec + WREC_LOST, r20
+wi_l6:	std	Y + 3, r31
+	std	Y + 4, r30
+wi_l5:	pop	r29
+	pop	r28
+	ldi	r20, 0xff
+	ret
+
+/* Called by wi_ret: the RET is the instruction under test */
+wi_rsub:
+	sei
+	ret
+
+wi_tail:
+	sbrc	r21, 7
+	rjmp	win_lost
+	lds	r21, wrec + WREC_SILENT
+	inc	r21
+	breq	wi_l7
+	sts	wrec + WREC_SILENT, r21
+wi_l7:	rjmp	win_lost
+1:	in	r31, SPH_IO		/* fill from the window's stack down */
+	mov	r30, r18
+	subi	r30, -1
+	ldi	r20, 0xff
+	ldi	r21, WIN_FILL
+0:	st	-Z, r20
+	dec	r21
+	brne	0b
+	ldi	r24, 0xff
+	sts	wprev, r24		/* no return seen in this round yet */
+	out	SPL_IO, r18
+	sts	wrec + WREC_BURST, r1
+	sts	wrec + WREC_OPEN, r22
+	/* WMODE2_INSN: one instruction right after SEI, see wi_table */
+	lds	r21, wrec + WREC_MODE2
+	sbrc	r21, 7
+	rjmp	wi_start
+	/* WMODE2_CLOSE: is the instruction right after SEI safe to close? */
+	sbrs	r21, 0
+	rjmp	11f
+	in	r21, SREG_IO		/* I is clear here */
+	sbrc	r23, 3
+	rjmp	12f
+	sei
+	cli
+	rjmp	6f
+12:	sei
+	out	SREG_IO, r21
+	rjmp	6f
+	/* nops, unless a class of instructions is chosen */
+11:	mov	r21, r23
+	andi	r21, 0x70
+	brne	2f
+	sei
+	nop
+	nop
+	nop
+	nop
+	/*
+	 * Each class opens the window itself: a pending interrupt is taken
+	 * in the decode cycle of the instruction right after SEI, so it hits
+	 * the first one of the class
+	 */
+2:	sbrs	r23, 4
+	rjmp	3f
+	sei
+	push	r20
+	push	r20
+	push	r20
+	nop
+3:	sbrs	r23, 5
+	rjmp	4f
+	sei
+	pop	r20
+	pop	r20
+	pop	r20
+	nop
+4:	sbrs	r23, 6
+	rjmp	9f
+	sei
+	rcall	win_sub
+	nop
+	call	win_sub
+	nop
+	lds	r20, wscratch + 2
+	sts	wscratch + 3, r20
+	st	X+, r20
+	ld	r20, -X
+	adiw	r24, 1
+	sbiw	r24, 1
+9:	sbrs	r23, 3
+	rjmp	5f
+	in	r21, SREG_IO
+	andi	r21, 0x7f
+	out	SREG_IO, r21
+	rjmp	6f
+5:	cli
+win_lost:
+6:	nop
+	nop
+	sts	wrec + WREC_OPEN, r1
+	sbrs	r23, 3
+	cli
+	nop
+	in	r21, SPL_IO
+	cp	r21, r18
+	breq	7f
+	sub	r21, r18
+	sts	wrec + WREC_LAST, r21
+	lds	r24, wrec + WREC_BAD
+	lds	r25, wrec + WREC_BAD + 1
+	adiw	r24, 1
+	sts	wrec + WREC_BAD, r24
+	sts	wrec + WREC_BAD + 1, r25
+7:	dec	r19
+	breq	8f
+	rjmp	1b
+8:	subi	r18, -WIN_REDZONE
+	out	SPL_IO, r18
+	lds	r28, wysave
+	lds	r29, wysave + 1
+win_end:
+	ret
+#endif

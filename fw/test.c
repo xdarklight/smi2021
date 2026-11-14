@@ -20,6 +20,7 @@
 #define TEST_CRASH		0xf6
 #define TEST_IRQ		0xf7
 #define TEST_RETLOG		0xf8
+#define TEST_WIN		0xf9
 
 #define INSN_MUL		0
 #define INSN_MOVW		1
@@ -54,7 +55,6 @@ static uint16_t identity(void)
 		   (FW_ISR_EVENTS ? 0x04 : 0) |
 		   (FW_ISR_BARE == 1 ? 0x10 : 0) | (FW_ISR_BARE == 2 ? 0x20 : 0) |
 		   (FW_ISR_BARE == 3 ? 0x40 : 0) | (FW_ISR_BARE == 4 ? 0x80 : 0);
-	/* ISR_BARE=5 has no bit of its own: options 0x06 with 0xf8 filled */
 	xbuf[17] = cur_mode;
 	put16(xbuf + 18, boot_count);
 	xbuf[20] = irq_last;
@@ -65,9 +65,31 @@ static uint16_t identity(void)
 	put16(xbuf + 24, usb_unknown_events);
 	put16(xbuf + 26, irq_census[11]);
 	irq_on();
+	xbuf[28] = (FW_PUSH_GUARD ? 0x01 : 0) | (FW_ISR_BARE << 4);
 
-	return 28;
+	return 29;
 }
+
+#if FW_ISR_BARE == 9
+#if FW_IRQ
+#error "ISR_BARE=9 enables interrupts itself, in its window: build with IRQ=0"
+#endif
+
+volatile uint8_t wrec[WREC_SIZE];
+
+/* One window per pass of the main loop, for as many as the host asked for */
+void irq_window_pass(void)
+{
+	if (!(wrec[WREC_MODE] & WMODE_RUN))
+		return;
+
+	irq_window();
+	if (!++wrec[WREC_PASSES])
+		wrec[WREC_PASSES + 1]++;
+	if (!--wrec[WREC_LEFT])
+		wrec[WREC_MODE] &= ~WMODE_RUN;
+}
+#endif
 
 static uint8_t insn(uint16_t test, uint8_t rampz, uint16_t *len)
 {
@@ -159,6 +181,9 @@ static uint16_t event_log(uint8_t clear)
 
 uint8_t test_in(const struct setup *s, uint16_t *len)
 {
+#if FW_ISR_BARE == 9
+	uint16_t i;
+#endif
 	uint8_t n;
 
 	switch (s->bRequest) {
@@ -195,9 +220,31 @@ uint8_t test_in(const struct setup *s, uint16_t *len)
 		for (n = 0; n < sizeof(retlog); n++)
 			xbuf[sizeof(retlog_crash) + n] =
 				((volatile uint8_t *)&retlog)[n];
+#if FW_IRQ
+		for (n = 0; n < sizeof(vec0_rec); n++)
+			xbuf[2 * sizeof(retlog) + n] = vec0_rec[n];
+#endif
 		irq_on();
-		*len = 2 * sizeof(retlog);	/* 200, see fw.h */
+		/* 200, see fw.h, and 6 bytes of vec0_rec with IRQ=1 */
+		*len = 2 * sizeof(retlog) + (FW_IRQ ? sizeof(vec0_rec) : 0);
 		return 0;
+#if FW_ISR_BARE == 9
+	case TEST_WIN:
+		/* interrupts are disabled here, as everywhere in C */
+		if (s->wIndex) {
+			/* a new run: wValue the mode, wIndex the passes */
+			for (i = 0; i < WREC_SIZE; i++)
+				wrec[i] = 0;
+			wrec[WREC_LEFT] = s->wIndex;
+			wrec[WREC_MODE] = s->wValue;
+			wrec[WREC_MODE2] = s->wValue >> 8;
+		}
+		for (i = 0; i < WREC_SIZE; i++)
+			xbuf[i] = wrec[i];
+		put16(xbuf + WREC_SIZE, (uint16_t)win_first);
+		*len = WREC_SIZE + 2;
+		return 0;
+#endif
 	case TEST_IRQ:
 		irq_off();
 		for (n = 0; n < sizeof(irqrec); n++)

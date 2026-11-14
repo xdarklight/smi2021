@@ -18,6 +18,12 @@
 #   make ISR_BARE=5            vector 11 notes its return address (0xf8)
 #   make ISR_BARE=6            vector 11 reads as the vendor's, no hw stack
 #   make ISR_BARE=7            vector 11 does what the vendor's does, no hw stack
+#   make IRQ=0 ISR_BARE=9      interrupts only in a window, vector 11 logs
+#                              where it returns to (0xf9)
+#   make IRQ=1 ISR_BARE=10     vector 11 notes its return address (0xf8),
+#                              then runs the C handler
+#   make PUSH_GUARD=0          leave the PUSHes of avr-gcc unguarded: with
+#                              IRQ=1, the firmware then fails (interrupt test)
 
 CROSS		?= avr-
 CC		:= $(CROSS)gcc
@@ -29,6 +35,7 @@ ALT0_STOP	?= 1
 IRQ		?= 0
 ISR_EVENTS	?= 1
 ISR_BARE	?= 0
+PUSH_GUARD	?= 1
 
 # Largest image known to work, 121 upload units of 62 bytes
 MAX_SIZE	:= 7502
@@ -44,8 +51,9 @@ CFLAGS		:= $(ARCH) -Os -std=gnu99 -Wall -Wextra -Werror=implicit \
 		   -ffreestanding -fno-jump-tables -fno-tree-switch-conversion \
 		   -ffunction-sections -fdata-sections -fshort-enums \
 		   -DFW_PID=$(PID) -DFW_ALT0_STOP=$(ALT0_STOP) -DFW_IRQ=$(IRQ) -DFW_ISR_EVENTS=$(ISR_EVENTS) \
-		   -DFW_ISR_BARE=$(ISR_BARE) -DF_CPU=30000000UL -g
-ASFLAGS		:= $(ARCH) -DFW_ISR_BARE=$(ISR_BARE) -g
+		   -DFW_ISR_BARE=$(ISR_BARE) -DFW_PUSH_GUARD=$(PUSH_GUARD) \
+		   -DF_CPU=30000000UL -g
+ASFLAGS		:= $(ARCH) -DFW_ISR_BARE=$(ISR_BARE) -DFW_IRQ=$(IRQ) -g
 LDFLAGS		:= $(ARCH) -Wl,-T,opensmi21.ld \
 		   -Wl,--gc-sections -Wl,-Map,$(B)/opensmi21.map
 
@@ -54,10 +62,24 @@ all: $(B)/opensmi21.bin check
 $(B):
 	mkdir -p $@
 
-$(B)/%.o: %.c fw.h regs.h Makefile | $(B)
-	$(CC) $(CFLAGS) -c -o $@ $<
+# The C sources go through pushguard.awk as assembly: an interrupt must
+# not start on a PUSH, see docs/hardware.md "Interrupt faults"
+ifeq ($(PUSH_GUARD),1)
+GUARD		:= awk -f pushguard.awk
+else
+GUARD		:= cat
+endif
 
-$(B)/%.o: %.S Makefile | $(B)
+$(B)/%.s: %.c fw.h regs.h win.h Makefile pushguard.awk | $(B)
+	$(CC) $(CFLAGS) -S -o $(B)/$*.raw.s $<
+	$(GUARD) $(B)/$*.raw.s > $@
+
+$(B)/%.o: $(B)/%.s
+	$(CC) $(ARCH) -c -o $@ $<
+
+.PRECIOUS: $(B)/%.s
+
+$(B)/%.o: %.S win.h Makefile | $(B)
 	$(CC) $(ASFLAGS) -c -o $@ $<
 
 $(B)/opensmi21.elf: $(OBJS) opensmi21.ld
@@ -79,7 +101,7 @@ $(B)/opensmi21.lst: $(B)/opensmi21.elf
 	$(OBJDUMP) -d $< > $@
 
 check: $(B)/opensmi21.lst $(B)/opensmi21.bin
-	./check.sh $(B)/opensmi21.lst $(B)/opensmi21.bin
+	./check.sh $(B)/opensmi21.lst $(B)/opensmi21.bin $(PUSH_GUARD)
 
 clean:
 	rm -rf $(B)
