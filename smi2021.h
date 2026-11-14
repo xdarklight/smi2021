@@ -78,6 +78,10 @@ struct smi2021_board {
 
 struct smi2021 {
 	struct device			*dev;
+	/*
+	 * Cleared on disconnect with both stream_lock and reg_lock held, so
+	 * either of them keeps it from changing.
+	 */
 	struct usb_device		*udev;
 	/* Device number, which selects the card= module parameter */
 	unsigned int			nr;

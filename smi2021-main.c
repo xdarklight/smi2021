@@ -155,6 +155,13 @@ static int smi2021_send_reg_msg(struct smi2021 *smi2021,
 {
 	lockdep_assert_held(&smi2021->reg_lock);
 
+	/*
+	 * The i2c adapter stays registered after a disconnect until the driver
+	 * state is released, so an access can still come in through i2c-dev.
+	 */
+	if (!smi2021->udev)
+		return -ENODEV;
+
 	return smi2021_ctrl_write(smi2021->udev, msg->head, msg, sizeof(*msg));
 }
 
@@ -810,8 +817,12 @@ static void smi2021_usb_disconnect(struct usb_interface *intf)
 	smi2021_snd_unregister(smi2021);
 
 	scoped_guard(mutex, &smi2021->stream_lock) {
-		/* Tell smi2021_set_stream() that the device is gone */
-		smi2021->udev = NULL;
+		/*
+		 * Tell smi2021_set_stream() and the register accesses that the
+		 * device is gone
+		 */
+		scoped_guard(mutex, &smi2021->reg_lock)
+			smi2021->udev = NULL;
 		smi2021->video_wanted = false;
 		smi2021->audio_wanted = false;
 
