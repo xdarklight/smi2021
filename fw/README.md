@@ -413,6 +413,3 @@ Points most likely to need attention next:
   presumably holds the length of a received packet (inferred).
 - **Alternate setting 0 stopping the engines** has never been done by the
   vendor firmware; if streaming fails to restart, try `ALT0_STOP=0`.
-- **Descriptors**: the fields the documents don't give are guesses that
-  should not matter to the host; the power value, 500 mA, matches the
-  vendor firmware's.
