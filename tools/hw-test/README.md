@@ -198,6 +198,14 @@ and reads every frame back through its dma-buf:
 
     ./dmabuf-test.py --std pal --input 0 --buffers 4
 
+`stall-test.py` checks how the firmware refuses requests, which the
+driver never provokes: requests it must stall, each followed by valid ones
+that must still work, and the halt feature of the streaming endpoint. It
+claims the interface, so the driver must be unloaded:
+
+    rmmod smi2021
+    ./stall-test.py 20
+
 ## What the pattern proves, and what it does not
 
 The frame counter is a row of binary blocks rather than rendered digits, so

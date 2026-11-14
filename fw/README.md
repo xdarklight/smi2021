@@ -395,6 +395,18 @@ Version 0.1 on an EasyCAP 002, uploaded through the bootloader with
   driver: steps 4 to 10 in PAL. So register
   access, i2c, modes 2 and 5 and the alternate settings work as far as the
   driver uses them.
+- **Alternate setting 0** (`ALT0_STOP=1`): stopping the engines when the
+  host selects alternate setting 0, which the original firmware never
+  does, lets them start again: `stress.sh` started and stopped video and
+  audio 20 times each and switched modes as often, and every stream
+  restarted.
+- **Stalls**: `tools/hw-test/stall-test.py` sent 13 kinds of requests that
+  must be refused, 20 times each: unknown vendor and standard requests, a
+  missing descriptor, register accesses that break the bounds of design
+  decision 3, a register access of 300 bytes, mode 7, `SET_FEATURE` on
+  endpoint 0. All 260 were stalled, the valid requests after each one
+  worked, the halt feature of 0x82 was set, reported and cleared, and the
+  device never enumerated again.
 
 ## Untested and risks
 
@@ -406,10 +418,8 @@ Points most likely to need attention next:
 - **Event handling inferred from the documents**: enumeration works, so
   clearing 0x1502 bit 4 by read-modify-write, the status stage of IN
   transfers that the hardware completes itself and the address change
-  after the status packet are right as far as enumeration and the Linux
-  driver exercise them. Stalls have not been exercised on purpose.
+  after the status packet are right as far as enumeration, the Linux
+  driver and the stall test exercise them.
 - **OUT data packets**: like the original, the firmware takes 64 bytes, or
   what is left of `wLength`, from each, and doesn't read 0x1517, which
   presumably holds the length of a received packet (inferred).
-- **Alternate setting 0 stopping the engines** has never been done by the
-  vendor firmware; if streaming fails to restart, try `ALT0_STOP=0`.
