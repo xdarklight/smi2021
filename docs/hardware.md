@@ -226,22 +226,48 @@ nearly every function avr-gcc writes, the return address is lost. That
 happened in the earlier runs: interrupts that returned to the first `PUSH`
 of a function were followed by one whose return address was stale.
 
-**About one interrupt in 4000 enters the reset vector instead of vector
-11.** It arrives there with I clear and the return address pushed, which
-looks like a restart (observed). With every `PUSH` protected, the firmware
-still restarted by itself, after some hundred to a few thousand control
-transfers, with the C handler as well as with an assembly handler that
-only reads the controller's registers while the main loop polls, and with
-requests of any one kind, the identity alone for example, which uses no
-`LPM`. Each time SP was 0x0fe4 at the reset vector: the SP of the
-main loop's function (0x0fe6) less the two bytes of a return address. A
-check at the reset vector that treated such an entry as vector 11 found
-46 of them in 191608 interrupts, each with I clear, SP 0x0fe4 and the
-return address on the stack pointing right after the call that enabled
-interrupts again in the main loop. Every one of them was the interrupt that
-had waited while the main loop had interrupts disabled, and was taken right
-after `SEI; RET`; it is not known why only that one. It may take a request
-that waited that long, and ends right as it is taken (inferred).
+**An interrupt that was requested while interrupts were disabled for more
+than a few dozen cycles may enter the reset vector instead of vector 11**
+once they are enabled again. It arrives there with I clear and the return
+address pushed, which looks like a restart (observed). With every `PUSH`
+protected, the firmware still restarted by itself, after some hundred to a
+few thousand control transfers, with the C handler as well as with an
+assembly handler that only reads the controller's registers while the
+main loop polls, and with requests of any one kind, the identity alone for
+example, which uses no `LPM`. Each time SP was 0x0fe4 at the reset vector:
+the SP of the main loop's function (0x0fe6) less the two bytes of a return
+address. A check at the reset vector that treated such an entry as vector
+11 found 46 of them in 191608 interrupts, each with I clear, SP 0x0fe4 and
+the return address on the stack pointing right after the call that enabled
+interrupts again in the main loop.
+
+At that point the main loop, polling the controller as the original's
+does, had kept interrupts disabled for some 60 cycles or more. A test build
+counted the interrupts taken at each place that enables interrupts and
+those of them that came through the reset vector, with switches for that
+place in the main loop, about 117000 interrupts per setting (observed):
+
+| At the main loop's `SEI` | Interrupts taken there | Through the reset vector |
+|--------------------------|------------------------|--------------------------|
+| as described, some 60 cycles with interrupts disabled | 11300–12200 | 15–21 |
+| one or two `NOP`s between `SEI` and `RET`; an `OUT` to SREG instead of `SEI` | 11400–12300 | 12–26 |
+| 4, 16 or 64 cycles more before the `SEI` | 12700–21800 | 15–27 |
+| 256 cycles more | 30076 | 7 |
+| 1024, 4096 or 16384 cycles more | 40063–51610 | 0 |
+| the handler services the events, the main loop still some 60 cycles with interrupts disabled | 28143 | 19 |
+| the handler services the events, the main loop disables interrupts for some 25 cycles only | 13138, 13556 | 0 |
+
+All of them were at that one place; none of about 700000 interrupts taken
+elsewhere came through the reset vector, among them the ones after the
+`PUSH` guards, which keep interrupts disabled for a few cycles each. All of
+them came in passes of the main loop that had found nothing new: at the
+reset vector, 0x1503 read 0x01 and 0x1502 0x01, an event that is no setup
+packet and leaves the code as it was, requested after the main loop had
+read 0x1503. The instruction that enables interrupts, and what follows it,
+make no difference; what matters is how long they were disabled while the
+request waited: a few dozen cycles never showed it, 60 to some hundreds of
+cycles about once in 500 to 700 interrupts taken there, 1000 cycles and
+more never.
 
 **Cause (inferred).** The core appears to be the AVR Core of opencores.org,
 see [CPU core](#cpu-core-1) under the comparison. In its 2006 sources, an
@@ -254,10 +280,16 @@ cycle, which is the cycle in which the interrupt asks for it, and the
 interrupt's later cycles don't ask again. `POP` doesn't write and is
 harmless, as observed. The vector address comes from a priority encoder
 over the request lines, which gives 0x0000, the reset vector, when no line
-is active. The 2006 sources latch it in the cycle the interrupt starts; a
-version that takes it a cycle later enters the reset vector if the
-request ends in that cycle. This was not checked against an older version
-of the sources, which were not available.
+is active. The 2006 sources latch the address and the decision to start an
+interrupt separately, from the same request lines at the same clock edge.
+That is consistent as long as the requests change with the CPU clock; a
+request from another clock domain, as the USB controller's presumably is,
+that changes right at that edge can start an interrupt with vector address
+0, and so can a version that takes the address a cycle later. Why only
+requests that waited between a few dozen and some hundreds of cycles meet
+it is not known; the request may change once at about that time after it
+was raised. None of this was checked against an older version of the
+sources, which were not available.
 
 **The original firmware** meets neither fault as far as its code shows: its
 compiler keeps saved registers on a software stack, so the image has no
@@ -266,8 +298,8 @@ It has one `SEI`, at the start, and no `CLI`: the main loop's call of the
 handler returns with `RETI` like the interrupt does, so I stays set except
 inside the handler, and the stack pointer is written only at reset. So an
 interrupt there is taken as soon as it is requested and never waits long,
-which may be why it doesn't meet the second fault (inferred); whether it
-ever enters the reset vector from an interrupt is not known.
+which fits it not meeting the second fault (inferred); whether it ever
+enters the reset vector from an interrupt is not known.
 
 **For a replacement**, polling with interrupts disabled avoids both. One
 that enables interrupts has to:
@@ -276,16 +308,26 @@ that enables interrupts has to:
   `PUSH`es (and `rcall .`, which it uses to make room on the stack)
   between `CLI` and an `OUT` that restores SREG, as OpenSMI21's
   `pushguard.awk` does to the compiler's assembly;
-- take an entry at the reset vector with I clear, its own state intact
-  (OpenSMI21 checks a magic number in SRAM that only it writes, and that
-  SP is in its stack) and a return address into its program on top of the
-  stack for an interrupt, and enter vector 11's handler, which returns
-  there. The check must not push anything before it knows SP is its own:
-  coming from the bootloader, SP points elsewhere.
+- keep interrupts disabled for a few dozen cycles at most where an
+  interrupt may be requested meanwhile: let the handler service the
+  events, as the original does in effect, and have the main loop only take
+  what the handler recorded. OpenSMI21 with `IRQ=1` disables them for some
+  22 cycles in its main loop. Its test requests still disable them for
+  longer, while they copy their replies;
+- preferably also take an entry at the reset vector for the interrupt it
+  is, as a safety net: with I clear, its own state intact (OpenSMI21
+  checks a flag that it sets whenever interrupts may be enabled, a magic
+  number in SRAM that only it writes, and that SP is within its stack) and
+  a return address into its program on top of the stack, enter vector 11's
+  handler, which returns there. The check must not push anything before it
+  knows SP is its own: coming from the bootloader, SP points elsewhere.
 
-With both, OpenSMI21 built with `IRQ=1` ran 25000 control requests of
-five kinds, then 40000 more of four kinds in turn, without a restart
-(observed), with 191608 interrupts taken.
+OpenSMI21 built with `IRQ=1` and only the first and the last of these ran
+65000 control requests without a restart, while 80 of some 380000
+interrupts came through the reset vector. With all three, it ran 786436
+interrupts, from about 260000 control requests of five kinds and five
+port resets in between, without a restart and with none through the reset
+vector (observed), as fast as before.
 
 ### Data space
 
@@ -942,10 +984,12 @@ November 2026:
 12. Find why the test firmware fails with interrupts enabled: with
     interrupts enabled for one instruction at a time, record what each
     interrupt finds on the stack, and with the firmware's own interrupt
-    handling, where it restarts. **Done**: two faults of the core, an
-    interrupt that starts on a `PUSH` and an interrupt that enters the
-    reset vector; with both worked around, the firmware runs with
-    interrupts enabled, see [Interrupt faults](#interrupt-faults).
+    handling, where it restarts, and count per place that enables
+    interrupts. **Done**: two faults of the core, an interrupt that starts
+    on a `PUSH` and an interrupt that waited long with interrupts disabled
+    and enters the reset vector; with the first worked around and the
+    second avoided, the firmware runs with interrupts enabled, see
+    [Interrupt faults](#interrupt-faults).
 
 ## Sources
 
