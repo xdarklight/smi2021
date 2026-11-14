@@ -312,8 +312,7 @@ that enables interrupts has to:
   interrupt may be requested meanwhile: let the handler service the
   events, as the original does in effect, and have the main loop only take
   what the handler recorded. OpenSMI21 with `IRQ=1` disables them for some
-  22 cycles in its main loop. Its test requests still disable them for
-  longer, while they copy their replies;
+  22 cycles in its main loop;
 - preferably also take an entry at the reset vector for the interrupt it
   is, as a safety net: with I clear, its own state intact (OpenSMI21
   checks a flag that it sets whenever interrupts may be enabled, a magic

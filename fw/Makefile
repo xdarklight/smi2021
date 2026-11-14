@@ -8,22 +8,7 @@
 #   make CROSS=/path/to/avr-   use another toolchain (default: avr- in PATH)
 #   make PID=0x003f            USB product id (default 0x003c)
 #   make ALT0_STOP=0           alternate setting 0 stops nothing
-#   make IRQ=0                 never enable interrupts, poll only
-#   make ISR_EVENTS=0          vector 11 only counts and logs; the main
-#                              loop polls the events (interrupt test)
-#   make ISR_BARE=1            vector 11 is a bare RETI (interrupt test)
-#   make ISR_BARE=2            vector 11 counts but reads no register
-#   make ISR_BARE=3            vector 11 reads 0x1503 and nothing else
-#   make ISR_BARE=4            vector 11 reads 0x1502 and nothing else
-#   make ISR_BARE=5            vector 11 notes its return address (0xf8)
-#   make ISR_BARE=6            vector 11 reads as the vendor's, no hw stack
-#   make ISR_BARE=7            vector 11 does what the vendor's does, no hw stack
-#   make IRQ=0 ISR_BARE=9      interrupts only in a window, vector 11 logs
-#                              where it returns to (0xf9)
-#   make IRQ=1 ISR_BARE=10     vector 11 notes its return address (0xf8),
-#                              then runs the C handler
-#   make PUSH_GUARD=0          leave the PUSHes of avr-gcc unguarded: with
-#                              IRQ=1, the firmware then fails (interrupt test)
+#   make IRQ=1                 enable interrupts (default: poll only)
 
 CROSS		?= avr-
 CC		:= $(CROSS)gcc
@@ -33,16 +18,13 @@ OBJDUMP		:= $(CROSS)objdump
 PID		?= 0x003c
 ALT0_STOP	?= 1
 IRQ		?= 0
-ISR_EVENTS	?= 1
-ISR_BARE	?= 0
-PUSH_GUARD	?= 1
 
 # Largest image known to work, 121 upload units of 62 bytes
 MAX_SIZE	:= 7502
 
 B		:= build
-SRCS_C		:= main.c usb.c vendor.c test.c
-SRCS_S		:= isr.S asm.S
+SRCS_C		:= main.c usb.c vendor.c
+SRCS_S		:= isr.S
 OBJS		:= $(addprefix $(B)/,$(SRCS_S:.S=.o) $(SRCS_C:.c=.o))
 
 # avr-libc's ATmega103: its startup code, headers and delay loops
@@ -50,10 +32,9 @@ ARCH		:= -mmcu=atmega103
 CFLAGS		:= $(ARCH) -Os -std=gnu99 -Wall -Wextra -Werror=implicit \
 		   -ffreestanding -fno-jump-tables -fno-tree-switch-conversion \
 		   -ffunction-sections -fdata-sections -fshort-enums \
-		   -DFW_PID=$(PID) -DFW_ALT0_STOP=$(ALT0_STOP) -DFW_IRQ=$(IRQ) -DFW_ISR_EVENTS=$(ISR_EVENTS) \
-		   -DFW_ISR_BARE=$(ISR_BARE) -DFW_PUSH_GUARD=$(PUSH_GUARD) \
+		   -DFW_PID=$(PID) -DFW_ALT0_STOP=$(ALT0_STOP) -DFW_IRQ=$(IRQ) \
 		   -DF_CPU=30000000UL -g
-ASFLAGS		:= $(ARCH) -DFW_ISR_BARE=$(ISR_BARE) -DFW_IRQ=$(IRQ) -g
+ASFLAGS		:= $(ARCH) -DFW_IRQ=$(IRQ) -g
 LDFLAGS		:= $(ARCH) -Wl,-T,opensmi21.ld \
 		   -Wl,--gc-sections -Wl,-Map,$(B)/opensmi21.map
 
@@ -64,22 +45,16 @@ $(B):
 
 # The C sources go through pushguard.awk as assembly: an interrupt must
 # not start on a PUSH, see docs/hardware.md "Interrupt faults"
-ifeq ($(PUSH_GUARD),1)
-GUARD		:= awk -f pushguard.awk
-else
-GUARD		:= cat
-endif
-
-$(B)/%.s: %.c fw.h regs.h win.h Makefile pushguard.awk | $(B)
+$(B)/%.s: %.c fw.h regs.h Makefile pushguard.awk | $(B)
 	$(CC) $(CFLAGS) -S -o $(B)/$*.raw.s $<
-	$(GUARD) $(B)/$*.raw.s > $@
+	awk -f pushguard.awk $(B)/$*.raw.s > $@
 
 $(B)/%.o: $(B)/%.s
 	$(CC) $(ARCH) -c -o $@ $<
 
 .PRECIOUS: $(B)/%.s
 
-$(B)/%.o: %.S win.h Makefile | $(B)
+$(B)/%.o: %.S Makefile | $(B)
 	$(CC) $(ASFLAGS) -c -o $@ $<
 
 $(B)/opensmi21.elf: $(OBJS) opensmi21.ld
@@ -101,7 +76,7 @@ $(B)/opensmi21.lst: $(B)/opensmi21.elf
 	$(OBJDUMP) -d $< > $@
 
 check: $(B)/opensmi21.lst $(B)/opensmi21.bin
-	./check.sh $(B)/opensmi21.lst $(B)/opensmi21.bin $(PUSH_GUARD)
+	./check.sh $(B)/opensmi21.lst $(B)/opensmi21.bin
 
 clean:
 	rm -rf $(B)

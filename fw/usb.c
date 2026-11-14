@@ -16,7 +16,6 @@
 #include "fw.h"
 #include "regs.h"
 
-#define PROGMEM		__attribute__((section(".progmem.data")))
 
 /* Standard requests */
 #define REQ_GET_STATUS		0x00
@@ -49,10 +48,6 @@
 
 uint8_t xbuf[XBUF_SIZE];
 volatile uint8_t usb_events;
-volatile uint8_t evlog[EVLOG_SIZE * 2];
-volatile uint8_t evlog_pos;
-volatile uint8_t evlog_count;
-volatile uint16_t usb_unknown_events;
 
 uint8_t usb_state;
 uint8_t usb_alt;
@@ -62,7 +57,7 @@ static uint8_t ep82_halted;
 #define LE16(x)		((x) & 0xff), ((x) >> 8)
 #define BCD_DEVICE	((FW_VERSION_MAJOR << 8) | FW_VERSION_MINOR)
 
-static const uint8_t dev_desc[18] PROGMEM = {
+static const __flash uint8_t dev_desc[18] = {
 	18, DT_DEVICE,
 	LE16(0x0200),		/* bcdUSB */
 	0x00, 0x00, 0x00,	/* class in the interface descriptor */
@@ -74,7 +69,7 @@ static const uint8_t dev_desc[18] PROGMEM = {
 	1,			/* bNumConfigurations */
 };
 
-static const uint8_t qual_desc[10] PROGMEM = {
+static const __flash uint8_t qual_desc[10] = {
 	10, DT_QUALIFIER,
 	LE16(0x0200),
 	0x00, 0x00, 0x00,
@@ -100,7 +95,7 @@ static const uint8_t qual_desc[10] PROGMEM = {
 	7, 5, STREAM_EP, 0x01, LE16(mps), 1
 
 /* High speed: 1023 bytes and 3 x 1024 bytes per microframe */
-static const uint8_t cfg_hs[CFG_LEN] PROGMEM = {
+static const __flash uint8_t cfg_hs[CFG_LEN] = {
 	CONFIG_HEAD,
 	INTERFACE(0, 0),
 	INTERFACE(1, 1),
@@ -110,7 +105,7 @@ static const uint8_t cfg_hs[CFG_LEN] PROGMEM = {
 };
 
 /* Full speed: 1023 bytes per frame for both alternate settings */
-static const uint8_t cfg_fs[CFG_LEN] PROGMEM = {
+static const __flash uint8_t cfg_fs[CFG_LEN] = {
 	CONFIG_HEAD,
 	INTERFACE(0, 0),
 	INTERFACE(1, 1),
@@ -119,47 +114,29 @@ static const uint8_t cfg_fs[CFG_LEN] PROGMEM = {
 	ISO_IN_EP(0x03ff),
 };
 
-static const char str_manufacturer[] PROGMEM = "OpenSMI21";
-static const char str_product[] PROGMEM = "SMI2021 open source firmware";
-static const char str_serial[] PROGMEM = "OPENSMI21-" FW_VERSION_STR;
+static const __flash char str_manufacturer[] = "OpenSMI21";
+static const __flash char str_product[] = "SMI2021 open source firmware";
+static const __flash char str_serial[] = "OPENSMI21-" FW_VERSION_STR;
 
 /* -- events --------------------------------------------------------------- */
-
-static uint8_t last_code;
 
 /*
  * docs/hardware.md "Interrupt": the event code in 0x1503 is not
  * acknowledged by reading it and stays until the next event, so this is
- * called from vector 11, from the main loop and from every wait for the
- * control endpoint. A setup packet is told by 0x1502 bit 4; the other codes
- * are recorded again on every call, which their handlers don't mind. Only
- * a change of the code goes into the log. Called with interrupts off.
+ * called again and again: with IRQ=1 from vector 11, with IRQ=0 from the
+ * main loop and from every wait for the control endpoint. A setup packet is
+ * told by 0x1502 bit 4; the other codes are recorded again on every call,
+ * which their handlers don't mind. Called with interrupts off.
  */
 static void usb_check_events(void)
 {
-	uint8_t code = USB_EVENT;
-	uint8_t status = 0;
-	uint8_t pos = evlog_pos;
-	uint8_t log = code != last_code;
-
-	switch (code) {
+	switch (USB_EVENT) {
 	case USB_EVT_SETUP:
-		status = USB_STATUS;
-		if (status & USB_STATUS_SETUP) {
-			uint8_t nd = irqrec.nd;
-
-			if (nd < IRQLOG_SIZE) {
-				irqrec.dbl[nd][0] = code;
-				irqrec.dbl[nd][1] = USB_EVENT;
-				irqrec.dbl[nd][2] = status;
-				irqrec.dbl[nd][3] = USB_STATUS;
-				irqrec.nd = nd + 1;
-			}
+		if (USB_STATUS & USB_STATUS_SETUP) {
 			USB_STATUS &= ~USB_STATUS_SETUP;
 			/* withdraw a packet of the previous transfer */
 			EP0_TX_STAT &= ~EP_FULL;
 			usb_events |= EV_SETUP;
-			log = 1;
 		}
 		break;
 	case USB_EVT_SPEED:
@@ -173,105 +150,30 @@ static void usb_check_events(void)
 		usb_events |= EV_SUSPEND;
 		break;
 	default:
-		if (log && usb_unknown_events != 0xffff)
-			usb_unknown_events++;
 		break;
 	}
-
-	last_code = code;
-	if (!log)
-		return;
-	evlog[pos * 2] = code;
-	evlog[pos * 2 + 1] = status;
-	evlog_pos = (pos + 1) & (EVLOG_SIZE - 1);
-	if (evlog_count != 0xff)
-		evlog_count++;
 }
 
-volatile struct irq_record irqrec;
-
 #if FW_IRQ
+volatile uint8_t irq_storm;
+
 /* interrupts taken, for the storm guard: read with interrupts enabled */
 static volatile uint16_t irq_ticks;
-#endif
 
-#if FW_ISR_BARE != 1 && FW_ISR_BARE != 5 && FW_ISR_BARE != 6 && \
-	FW_ISR_BARE != 7 && FW_ISR_BARE != 9
-#if FW_ISR_BARE == 10
-/*
- * Interrupt test: vector 11 in isr.S notes its return address and jumps
- * here; __vector_24 is no vector of the table, the name only makes avr-gcc
- * build an interrupt handler (and pushguard.awk leave it alone)
- */
-#define USB_ISR	__vector_24
-#else
-#define USB_ISR	__vector_11
-#endif
-static inline __attribute__((always_inline)) void usb_isr(void)
+void __vector_11(void) __attribute__((signal, used, externally_visible));
+void __vector_11(void)
 {
-	uint8_t n = irqrec.n;
-
-	if (irq_census[11] != 0xffff)
-		irq_census[11]++;
-	irqrec.v11++;
-#if FW_ISR_BARE == 2
-	/* interrupt test: touch no register of the controller */
-	(void)n;
-	return;
-#elif FW_ISR_BARE == 3
-	/* interrupt test: read the event code and nothing else */
-	if (n < IRQLOG_SIZE) {
-		irqrec.log[n][0] = USB_EVENT;
-		irqrec.n = n + 1;
-	} else {
-		(void)USB_EVENT;
-	}
-	return;
-#elif FW_ISR_BARE == 4
-	/* interrupt test: read the status register and nothing else */
-	if (n < IRQLOG_SIZE) {
-		irqrec.log[n][1] = USB_STATUS;
-		irqrec.n = n + 1;
-	} else {
-		(void)USB_STATUS;
-	}
-	return;
-#endif
-	if (n < IRQLOG_SIZE) {
-		irqrec.log[n][0] = USB_EVENT;
-		irqrec.log[n][1] = USB_STATUS;
-		irqrec.log[n][2] = EP0_TX_STAT;
-		irqrec.log[n][3] = EP0_RX_STAT;
-		irqrec.n = n + 1;
-	}
-#if FW_ISR_EVENTS
-	usb_check_events();
-#endif
-}
-
-void USB_ISR(void) __attribute__((signal, used, externally_visible));
-void USB_ISR(void)
-{
-#if FW_IRQ
 	irq_armed = 0;
 	irq_ticks++;
-#endif
-	usb_isr();
-#if FW_IRQ
+	usb_check_events();
 	irq_armed = 1;			/* RETI enables interrupts again */
-#endif
 }
-#endif
 
 /*
  * Should vector 11 keep firing, the main loop would barely run: switch
  * interrupts off for good once it was taken more than 50 times between two
- * passes of the main loop.
- */
-#if FW_IRQ
-/*
- * With interrupts enabled: it must not disable them, see usb_poll(), so it
- * reads irq_ticks twice, until both reads agree.
+ * passes of the main loop. It must not disable interrupts itself, see
+ * usb_poll(), so it reads irq_ticks twice, until both reads agree.
  */
 static void irq_storm_guard(void)
 {
@@ -284,20 +186,8 @@ static void irq_storm_guard(void)
 	} while (now != again);
 	if ((uint16_t)(now - last) > 50) {
 		irq_off();
-		irqrec.storm = 1;
+		irq_storm = 1;
 	}
-	last = now;
-}
-#else
-static void irq_storm_guard(void)
-{
-	static uint32_t last;
-	uint32_t now;
-
-	irq_off();
-	now = irqrec.v11;
-	if (now - last > 50)
-		irqrec.storm = 1;
 	last = now;
 }
 #endif
@@ -312,7 +202,7 @@ static uint8_t ctrl_aborted(void)
 	irq_off();
 #if FW_IRQ
 	/* the handler services the events, see usb_poll() */
-	if (irqrec.storm)
+	if (irq_storm)
 		usb_check_events();
 	r = usb_events & (EV_SETUP | EV_RESET);
 	if (sreg & (1 << SREG_I))
@@ -405,20 +295,20 @@ static void ep0_send(uint16_t len, uint16_t wlength)
 		ep0_tx(p, 0);
 }
 
-static void copy_flash(const uint8_t *src, uint8_t n)
+static void copy_flash(const __flash uint8_t *src, uint8_t n)
 {
 	uint8_t i;
 
 	for (i = 0; i < n; i++)
-		xbuf[i] = flash_byte(src + i);
+		xbuf[i] = src[i];
 }
 
-static uint8_t string_desc(const char *s)
+static uint8_t string_desc(const __flash char *s)
 {
 	uint8_t n = 2;
 	uint8_t c;
 
-	while ((c = flash_byte(s++)) != 0) {
+	while ((c = *s++) != 0) {
 		xbuf[n++] = c;
 		xbuf[n++] = 0;
 	}
@@ -623,12 +513,8 @@ static void handle_setup(void)
 			return;
 
 	raw = (uint8_t *)&s;
-	for (off = 0; off < sizeof(s); off++) {
+	for (off = 0; off < sizeof(s); off++)
 		raw[off] = REG8(EP0_RX_BUF + off);
-		dbg_now.setup[dbg_now.pos][off] = raw[off];
-	}
-	dbg_now.pos = (dbg_now.pos + 1) & (DBG_SETUPS - 1);
-	dbg_now.phase = 1;
 	EP0_RX_STAT &= ~EP_FULL;
 
 	EP0_TX_ADDR_L = EP0_TX_BUF & 0xff;
@@ -641,19 +527,15 @@ static void handle_setup(void)
 	if (s.bmRequestType & SETUP_DIR_IN) {
 		if (type == SETUP_TYPE_STD)
 			err = std_in(&s, &len);
-		else if (type == SETUP_TYPE_VENDOR && s.bRequest >= 0xf0)
-			err = test_in(&s, &len);
 		else if (type == SETUP_TYPE_VENDOR)
 			err = vendor_in(&s, &len);
 		else
 			err = 1;
 
-		dbg_now.phase = 2;
 		if (err)
 			ep0_stall();
 		else
 			ep0_send(len, s.wLength);
-		dbg_now.phase = 0;
 		return;
 	}
 
@@ -672,14 +554,12 @@ static void handle_setup(void)
 			return;
 	}
 
-	dbg_now.phase = 3;
 	if (type == SETUP_TYPE_STD)
 		err = std_out(&s, &addr);
 	else if (type == SETUP_TYPE_VENDOR)
 		err = vendor_out(&s, s.wLength);
 	else
 		err = 1;
-	dbg_now.phase = 4;
 
 	if (err) {
 		ep0_stall();
@@ -688,7 +568,6 @@ static void handle_setup(void)
 
 	if (!ep0_tx(xbuf, 0))
 		return;
-	dbg_now.phase = 5;
 
 	if (addr != 0xff) {
 		/* the controller does not delay the change of address */
@@ -697,7 +576,6 @@ static void handle_setup(void)
 		USB_ADDR = addr;
 		usb_state = addr ? STATE_ADDRESS : STATE_DEFAULT;
 	}
-	dbg_now.phase = 0;
 }
 
 static void handle_reset(void)
@@ -739,21 +617,15 @@ void usb_poll(void)
 	 */
 	irq_storm_guard();
 	irq_off();
-	if (irqrec.storm)
+	if (irq_storm)
 		usb_check_events();
 	ev = usb_events;
 	usb_events = 0;
 	irq_on();
 #else
-	irq_storm_guard();
 	usb_check_events();
 	ev = usb_events;
 	usb_events = 0;
-	irq_on();
-#endif
-
-#if FW_ISR_BARE == 9
-	irq_window_pass();
 #endif
 
 	if (ev & EV_RESET)

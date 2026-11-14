@@ -28,9 +28,6 @@
 #define FW_ALT0_STOP		1
 #endif
 
-/* Version of the test request interface, see README.md */
-#define TEST_IF_VERSION		3
-
 #define SETUP_DIR_IN		0x80
 #define SETUP_TYPE_MASK		0x60
 #define SETUP_TYPE_STD		0x00
@@ -59,36 +56,6 @@ extern uint8_t xbuf[XBUF_SIZE];
 #define EV_SUSPEND		0x08
 extern volatile uint8_t usb_events;
 
-/* Interrupt census, filled by the handlers in isr.S and the USB handler */
-#define NUM_VECTORS		24
-extern volatile uint16_t irq_census[NUM_VECTORS];
-extern volatile uint8_t irq_last;
-
-/* USB event log, see the 0xf5 test request */
-#define EVLOG_SIZE		16
-extern volatile uint8_t evlog[EVLOG_SIZE * 2];
-extern volatile uint8_t evlog_pos;
-extern volatile uint8_t evlog_count;
-extern volatile uint16_t usb_unknown_events;
-
-/* Survives a reset, counts the starts of the firmware */
-extern uint16_t boot_count;
-
-/*
- * Crash record, test request 0xf6. dbg_now is kept across a restart that
- * doesn't lose power; main() copies it to dbg_crash when it finds one, as
- * the enumeration after the restart overwrites it.
- */
-#define DBG_SETUPS	8
-struct dbg_record {
-	uint16_t reset_sp;		/* SP at reset, see isr.S */
-	uint8_t phase;			/* of the last control request */
-	uint8_t pos;			/* next entry of setup[] */
-	uint8_t setup[DBG_SETUPS][8];
-};
-extern struct dbg_record dbg_now, dbg_crash;
-extern uint16_t reset_sp;
-
 /* usb.c */
 extern uint8_t usb_state;
 extern uint8_t usb_alt;
@@ -103,25 +70,6 @@ void stream_stop(void);
 uint8_t vendor_in(const struct setup *s, uint16_t *len);
 uint8_t vendor_out(const struct setup *s, uint16_t len);
 
-/* test.c */
-uint8_t test_in(const struct setup *s, uint16_t *len);
-
-/* asm.S */
-void delay_1000(uint16_t units);		/* exactly 1000 cycles per unit */
-void insn_mul(uint8_t *out);
-void insn_movw(uint8_t *out);
-void insn_lpm_z(uint8_t *out);
-void insn_lpm_zp(uint8_t *out);
-void insn_elpm(uint8_t *out, uint8_t rampz);
-void insn_elpm_z(uint8_t *out, uint8_t rampz);
-void insn_elpm_zp(uint8_t *out, uint8_t rampz);
-extern const uint8_t insn_pattern[];
-void pm_read(uint8_t *dst, uint16_t addr, uint8_t len, uint16_t elpm);
-uint8_t flash_byte(const void *addr);	/* plain LPM */
-
-/* Linker symbols */
-extern const uint8_t __image_end[];
-
 #if FW_IRQ
 /*
  * isr.S: 1 while interrupts may be enabled. irq_on() sets it before the
@@ -132,6 +80,9 @@ extern const uint8_t __image_end[];
  * restarts the firmware instead of being resumed.
  */
 extern volatile uint8_t irq_armed;
+
+/* usb.c: set once vector 11 kept firing, see irq_storm_guard() */
+extern volatile uint8_t irq_storm;
 #endif
 
 static inline void irq_off(void)
@@ -142,56 +93,10 @@ static inline void irq_off(void)
 #endif
 }
 
-/* Interrupt test, request 0xf7 */
-#define IRQLOG_SIZE	8
-struct irq_record {
-	uint32_t v11;			/* times vector 11 was taken */
-	uint8_t storm;			/* interrupts were switched off for good */
-	uint8_t n;			/* entries in log[] */
-	uint8_t log[IRQLOG_SIZE][4];	/* 0x1503, 0x1502, 0x151c, 0x1518 */
-	/*
-	 * For the first setup packets the main loop finds: 0x1503 and 0x1502,
-	 * each read twice in a row, to tell whether reading them changes them.
-	 */
-	uint8_t nd;
-	uint8_t dbl[IRQLOG_SIZE][4];
-};
-extern volatile struct irq_record irqrec;
-
-/*
- * Interrupt test ISR_BARE=5, request 0xf8: at each entry of vector 11, the
- * return address on the stack, as two raw bytes, and SREG as found on
- * entry, in a ring; and how deep the handler nested. Kept across a restart
- * without power loss and copied aside then, see main().
- */
-#define RETLOG_SIZE	32
-struct ret_record {
-	uint8_t pos;			/* entries ever written, wraps */
-	uint8_t depth;			/* handlers running right now */
-	uint8_t maxdepth;		/* the most that ever ran at once */
-	uint8_t pad;
-	uint8_t addr[RETLOG_SIZE][3];
-};
-extern volatile struct ret_record retlog;
-extern struct ret_record retlog_crash;
-
-/* isr.S, IRQ=1: interrupts that ended at the reset vector, see there */
-extern volatile uint8_t vec0_rec[6];
-
-/*
- * Interrupt window test, ISR_BARE=9, request 0xf9: the record that the
- * window in asm.S and its handler in isr.S fill, laid out in win.h
- */
-#include "win.h"
-extern volatile uint8_t wrec[WREC_SIZE];
-void irq_window(void);				/* asm.S */
-void irq_window_pass(void);			/* test.c */
-extern const uint8_t win_first[];		/* asm.S, start of the window */
-
 static inline void irq_on(void)
 {
 #if FW_IRQ
-	if (!irqrec.storm) {
+	if (!irq_storm) {
 		irq_armed = 1;
 		sei();
 	}

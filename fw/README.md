@@ -5,13 +5,12 @@ bridge (EasyCAP DC60, EasyCAP 002), written from the documentation in this
 repository. It implements the host interface of
 [`docs/protocol.md`](../docs/protocol.md), so that the Linux driver in this
 repository and [`tools/bridge-probe`](../tools/bridge-probe/README.md) work
-with it unchanged, and adds test requests for the experiments 8 to 11 of
-[`docs/hardware.md`](../docs/hardware.md#experiments).
+with it unchanged. The Linux driver uploads it.
 
-> **Partly tested.** On an EasyCAP 002, version 0.1 enumerates at high
-> speed, answers its test requests and ran experiments 8 to 12, also with
-> interrupts enabled. Streaming, the register access requests and the Linux
-> driver on top of it have not been tried yet. See [On
+> **Partly tested.** On an EasyCAP 002, the Linux driver works on version
+> 0.1: video and audio capture in PAL and NTSC, mode switches and the
+> driver's stress tests pass, with and without interrupts. Modes 3 and 4,
+> the second i2c engine and a DC60 have not been tried. See [On
 > hardware](#on-hardware).
 
 ## Building
@@ -26,18 +25,6 @@ and Ubuntu that is `gcc-avr`, `binutils-avr` and `avr-libc`; on Arch Linux
     make PID=0x003f                   # USB product id, default 0x003c
     make ALT0_STOP=0                  # alternate setting 0 stops nothing
     make IRQ=1                        # enable interrupts, see below
-    make IRQ=1 ISR_EVENTS=0           # vector 11 only counts and logs
-    make IRQ=1 ISR_BARE=1             # vector 11 is a bare RETI
-    make IRQ=1 ISR_BARE=2             # vector 11 counts, reads no register
-    make IRQ=1 ISR_BARE=3             # vector 11 reads 0x1503 only
-    make IRQ=1 ISR_BARE=4             # vector 11 reads 0x1502 only
-    make IRQ=1 ISR_BARE=5             # vector 11 records its return address
-    make IRQ=1 ISR_BARE=6             # reads 0x1503, 0x1502, no stack
-    make IRQ=1 ISR_BARE=7             # does what the original does, no stack
-    make IRQ=1 ISR_BARE=10            # vector 11 records its return address,
-                                      # then runs the C handler
-    make ISR_BARE=9                   # interrupts only in a test window (0xf9)
-    make PUSH_GUARD=0                 # leave avr-gcc's PUSHes unprotected
 
 `IRQ=0`, the default, never enables interrupts and polls the controller.
 `IRQ=1` enables them and services the USB events in vector 11; the main
@@ -48,21 +35,20 @@ faults that a firmware with interrupts enabled has to take care of
 
 - every run of `PUSH`es that avr-gcc writes, and every `rcall .`, is put
   between `CLI` and the `OUT` that restores SREG, by `pushguard.awk`,
-  which the build runs on the compiler's assembly (`PUSH_GUARD=1`, the
-  default; with `IRQ=0` it costs a few bytes and is harmless). Interrupt
-  handlers (`__vector_N`) are left alone, as they run with I clear;
+  which the build runs on the compiler's assembly; with `IRQ=0` it costs
+  a few bytes and is harmless. Interrupt handlers (`__vector_N`) are left
+  alone, as they run with I clear;
 - an interrupt requested while interrupts are disabled for more than a
   few dozen cycles may enter the reset vector when they are enabled again.
   So the main loop disables them for some 22 cycles only, to take
   `usb_events`, and `ctrl_aborted()`, which the waits of the control
   endpoint call, likewise; the storm guard reads its counter of interrupts
-  with interrupts enabled. The test requests still disable them for longer
-  while they copy their replies;
+  with interrupts enabled;
 - as a safety net, the startup code takes an entry at the reset vector
   with I clear, `irq_armed` set, `boot_magic` set, SP within the stack
   (from `__noinit_end` to 0x0ffd) and a return address into the program
-  on top of the stack for an interrupt that ended up there, counts it (see
-  0xf8) and enters vector 11's handler instead of restarting. `irq_armed`
+  on top of the stack for an interrupt that ended up there, and enters
+  vector 11's handler instead of restarting. `irq_armed`
   is set before every `SEI` and before the handler returns, and cleared by
   `irq_off()` and on the handler's entry, so that a jump to 0x0000 from
   code running with interrupts disabled restarts the firmware.
@@ -72,20 +58,15 @@ main loop polling the controller with interrupts disabled for some 60
 cycles or more, as `IRQ=0` does, about one interrupt in 4000 came through
 the reset vector; the safety net kept the firmware running then.
 
-`ISR_EVENTS` and `ISR_BARE` only matter for the interrupt tests, see 0xf3,
-0xf7, 0xf8 and 0xf9 under [Test requests](#test-requests).
-
 The result is `build/opensmi21.bin`: a plain image from address 0, padded
 with 0xff to a multiple of 62 bytes, as the bootloader takes it. The build
 fails if the image grows beyond 7502 bytes, the largest image known to
 work, though program memory is 8 KB. `make` also runs `check.sh`, see
 [Checks](#checks). Built with avr-gcc 7.3.0 and the defaults, version 0.1
-is 5724 bytes, 5766 padded (93 upload units); with `IRQ=1`, 6062 bytes,
-6076 padded (98 upload units). It also builds with avr-gcc 16.2.0,
-binutils 2.47 and avr-libc 2.3.2 (Arch Linux), to 5552 bytes, 5580 padded
-(90 upload units), and 5892 bytes with `IRQ=1`. On an EasyCAP 002, that
-default build enumerates, answers the identity, runs 2000 rounds of
-`soak` without a restart and times 30 MHz.
+is 3404 bytes, 3410 padded (55 upload units); with `IRQ=1`, 3786 bytes,
+3844 padded (62 upload units). It also builds with avr-gcc 16.2.0,
+binutils 2.47 and avr-libc 2.3.2 (Arch Linux), to 3236 bytes, 3286 padded
+(53 upload units), and 3620 bytes with `IRQ=1`.
 
 The Linux driver uploads it from `smi2021/opensmi21.bin` in the firmware
 directory, the name it would have in linux-firmware:
@@ -101,19 +82,15 @@ unloaded:
 
 | File | Contents |
 |------|----------|
-| `isr.S` | handlers of the vectors other than 11, for the census; the stack pointer at reset for the crash record; with `IRQ=1`, the check for an interrupt that entered the reset vector; the assembly handlers of `ISR_BARE` |
 | `main.c` | bring-up and main loop |
-| `usb.c` | USB controller, control endpoint, standard requests, descriptors |
+| `usb.c` | USB controller, control endpoint, standard requests, descriptors; with `IRQ=1`, the handler of vector 11 |
 | `vendor.c` | vendor requests: modes, streaming engines, register access, i2c |
-| `test.c` | test requests |
-| `asm.S` | the delay loop of the timing request, program memory reads, instruction tests, the interrupt window of `ISR_BARE=9` |
-| `win.h` | layout of the record of the interrupt window, request 0xf9 |
+| `isr.S` | the handler of the vectors other than 11, which returns; with `IRQ=1`, the check for an interrupt that entered the reset vector |
 | `pushguard.awk` | puts avr-gcc's `PUSH`es under `CLI`, see [Building](#building) |
 | `regs.h` | register addresses from `docs/hardware.md` |
 | `fw.h` | shared declarations, version, build options |
 | `opensmi21.ld` | memory layout |
 | `check.sh` | checks of the disassembly and the image |
-| `test-requests.py` | host side of the test requests, with python-libusb1 |
 
 ## What is implemented
 
@@ -122,7 +99,9 @@ unloaded:
   avr-libc's startup code: 24 vectors of one `JMP` each, `SP` = 0x0fff,
   `.data` copied with the plain `ELPM`, `.bss` cleared, then `main()`.
   SRAM 0x0060–0x0fff; the linker script is the firmware's own, for the
-  info block at 0x0060 and the limits.
+  info block at 0x0060 and the limits. Only vector 11 is ever taken; the
+  others return at once. The descriptors are in program memory, as
+  `__flash` data, which avr-gcc reads with the plain `LPM`.
 - **Bring-up**: the sequence of `docs/hardware.md` "Startup": `DDRA` = 0xff,
   status of both i2c engines 0, mode 3 prepared (0x1580 = 0x03, 0x1880 = 0),
   the USB controller set up with the documented values, `PC0` driven low,
@@ -140,10 +119,9 @@ unloaded:
   clears the bit and withdraws a pending packet by clearing 0x151c bit 7),
   speed detected (0x80: maximum packet size of blocks A and B 0x0400 at high
   speed, 0x03ff otherwise), bus reset (0x81), suspend (0x85: `PC0` low,
-  0x3080 bit 4, 0x1500 bit 2). Other codes are counted and ignored. As the
-  code stays until the next event, a reset, speed or suspend event is
-  handled again on every pass until another one arrives, and only a change
-  of the code is logged and counted.
+  0x3080 bit 4, 0x1500 bit 2). Other codes are ignored. As the code stays
+  until the next event, a reset, speed or suspend event is handled again
+  on every pass until another one arrives.
 - **Control endpoint**: setup packet from 0x2000, OUT data packets from
   0x2000, IN data packets of up to 64 bytes at 0x2040 with the length in
   0x151b and 0x151c bit 7 to send, zero length status packets, stall with
@@ -187,7 +165,6 @@ unloaded:
   bytes at SRAM 0x0060. Stalled as documented: a bridge access with other
   than 2 address bytes, command bits 7–6 `10` with address bytes, `11` with
   other than one address byte.
-- **Test requests**: see [Test requests](#test-requests).
 
 ### Out of scope
 
@@ -219,8 +196,8 @@ following:
 2. **Info query**: the 16 bytes at SRAM 0x0060 keep their documented
    initial values 0x00–0x0f. The documents give them no meaning but don't
    say a host may ignore them either, so they were not replaced by an
-   identity block; the firmware identifies itself through its serial
-   number and test request 0xf0 instead.
+   identity block; the firmware identifies itself through its strings and
+   its serial number instead.
 3. **Register access bounds**: requests shorter than the 5 byte header are
    stalled; a read must fit the reply (address bytes + size ≤ 32); a write
    must have its data in the request (5 + address bytes + size ≤
@@ -249,10 +226,9 @@ following:
    `SET_INTERFACE` to a non-zero setting starts again even if one is
    already selected, as the vendor sequence "mode 2, setting 2, then mode
    5, setting 2" needs.
-9. **IN vendor requests** need `bRequest` 0x01 (0xf0 and up are the test
-   requests); only the low byte of `wValue` is used. The recipient bits and
-   `wIndex` are ignored for all vendor requests except where a test request
-   uses `wIndex`.
+9. **IN vendor requests** need `bRequest` 0x01; only the low byte of
+   `wValue` is used. The recipient bits and `wIndex` are ignored for all
+   vendor requests.
 10. **Halt feature of endpoint 0x82** acts on the block that the current
     mode made endpoint 0x82 (block B in modes 3 and 5, A in modes 2 and 4),
     not always on block B as in the original; setting it writes state 10,
@@ -277,289 +253,37 @@ following:
     gets a zero length packet.
 17. **Interrupts** stay disabled by default (`IRQ=0`): it needs nothing
     of the core's faults taken care of, and has been tested the longest.
-    `IRQ=1` has been tested with control transfers only.
 
-## Test requests
+## Debugging
 
-All test requests are vendor IN requests to the device: `bmRequestType`
-0xc0, `bRequest` 0xf0 to 0xf9. They don't clash with `bRequest` 0x01 of
-the driver and the bootloader, and work in every device state. A reply
-longer than `wLength` is cut to `wLength`. Unknown `bRequest` values from
-0xf0 up are stalled. Multi-byte values are little endian. Nothing writes
-program memory; there is no `SPM`. `test-requests.py` sends each of them
-and decodes the reply, for example:
-
-    ./test-requests.py identity
-    ./test-requests.py insn 4
-    ./test-requests.py pm 0 65536 > program-memory.bin
-    ./test-requests.py timing 10000 50000
-
-### 0xf0: identity
-
-`wValue` 0, `wIndex` 0, `wLength` 29.
-
-| Offset | Size | Contents |
-|--------|------|----------|
-| 0 | 9 | "OpenSMI21" |
-| 9 | 1 | version of the test request interface, 3 |
-| 10 | 1 | firmware version, major (0) |
-| 11 | 1 | firmware version, minor (1) |
-| 12 | 2 | USB product id |
-| 14 | 2 | image size in bytes, without padding |
-| 16 | 1 | build options: bit 0 `ALT0_STOP`, bit 1 `IRQ`, bit 2 `ISR_EVENTS`, bit 3 `VECTORS=rjmp48` (before avr-libc), bit 4 `ISR_BARE=1`, bit 5 `ISR_BARE=2`, bit 6 `ISR_BARE=3`, bit 7 `ISR_BARE=4`; the other values of `ISR_BARE` are in byte 28 only |
-| 17 | 1 | current mode |
-| 18 | 2 | start counter: number of starts since the counter was last found invalid (see 0xf3) |
-| 20 | 1 | last vector that hit a census stub, 0xff for none |
-| 21 | 1 | device state: 0 default, 1 address, 2 configured |
-| 22 | 1 | current alternate setting |
-| 23 | 1 | 0x1501 (bit 1: high speed) |
-| 24 | 2 | number of USB events with an unknown code |
-| 26 | 2 | number of times vector 11 was taken, saturating at 0xffff |
-| 28 | 1 | build options: bit 0 `PUSH_GUARD`, bits 7–4 `ISR_BARE` |
-
-Interface version 1, of the firmware before the rename, had "SMIOPEN" in 7
-bytes and so every field 2 bytes earlier, and ended at offset 24. Version
-2 ended at offset 28 and had no request 0xf9.
-
-### 0xf1: instruction test (experiment 8)
-
-`wValue` = test number, `wIndex` bits 7–0 = value written to `RAMPZ` (I/O
-0x3b, ATmega103) for the `ELPM` tests, `wLength` 18. A test number above 6
-is stalled.
-
-Each test loads known values into the registers involved, runs the
-instruction once as a raw opcode, and reports the registers before and
-after. A core that lacks an instruction may ignore it, execute something
-else, or crash; run each test on its own and check with 0xf0 that the
-firmware is still alive (the start counter shows a restart through the
-reset vector).
-
-| Offset | Contents |
-|--------|----------|
-| 0 | test number |
-| 1 | `RAMPZ` value written (`ELPM` tests), else 0 |
-| 2–5 | registers A, B, C, D before |
-| 6–9 | registers A, B, C, D after |
-| 10 | `SREG` before the instruction |
-| 11 | `SREG` after the instruction |
-| 12 | `RAMPZ` read back after writing it (`ELPM` tests), else 0 |
-| 13 | `RAMPZ` after the instruction (`ELPM` tests), else 0 |
-| 14–15 | first two pattern bytes, read with plain `LPM`: 0x3c, 0xc3 |
-| 16–17 | program memory address of the pattern |
-
-| Test | Instruction | Opcode | A, B, C, D | Before | Executed correctly | Ignored |
-|------|-------------|--------|------------|--------|--------------------|---------|
-| 0 | `MUL r18, r19` | 0x9f23 | r0, r1, r18, r19 | a5 5a c3 5b | 51 45 c3 5b; `SREG` C and Z clear (both set before) | a5 5a c3 5b; C and Z still set |
-| 1 | `MOVW r18, r20` | 0x019a | r18, r19, r20, r21 | 11 22 33 44 | 33 44 33 44 | 11 22 33 44 |
-| 2 | `LPM r18, Z` | 0x9124 | r18, r0, ZL, ZH | a5 5a Z | 3c 5a Z | a5 5a Z (a5 3c Z: executed as plain `LPM`) |
-| 3 | `LPM r18, Z+` | 0x9125 | r18, r0, ZL, ZH | a5 5a Z | 3c 5a Z+1 | a5 5a Z |
-| 4 | `ELPM` (r0) | 0x95d8 | r0, r18, ZL, ZH | 5a a5 Z | 3c a5 Z with `RAMPZ` 0 | 5a a5 Z |
-| 5 | `ELPM r18, Z` | 0x9126 | r18, r0, ZL, ZH | a5 5a Z | 3c 5a Z with `RAMPZ` 0 | a5 5a Z |
-| 6 | `ELPM r18, Z+` | 0x9127 | r18, r0, ZL, ZH | a5 5a Z | 3c 5a Z+1 with `RAMPZ` 0 | a5 5a Z |
-
-Z is the pattern address of bytes 16–17. With a non-zero `RAMPZ`, a working
-`ELPM` returns the byte at `RAMPZ` × 0x10000 + Z instead; compare with
-request 0xf2. Byte 12 equal to the written value suggests that `RAMPZ`
-exists. The firmware puts the previous value of `RAMPZ` back after the
-test. `SPM` is deliberately not tested.
-
-### 0xf2: program memory read (experiment 9)
-
-`wValue` = byte address, `wIndex` bits 7–0 = `RAMPZ`, bit 8 = use `ELPM`,
-`wLength` = number of bytes, at most 64 (more is cut to 64).
-
-Returns the bytes at `wValue` and up, read with plain `LPM` (`r0`), or with
-`ELPM` (`r0`, the raw opcode 0x95d8) if bit 8 is set, after writing
-`RAMPZ`; the previous `RAMPZ` is put back afterwards. Z wraps from 0xffff to
-0 without a carry into `RAMPZ`. Reading the image itself back is a
-reference; where the reads stop repeating the image or turn into a
-constant shows the size of program memory, and a different, stable content
-may be the boot ROM. `ELPM` should only be used after test 4 of 0xf1 has
-shown that it works.
-
-### 0xf3: interrupt census (experiment 10)
-
-`wValue` bit 0 = clear the counters after reading, `wIndex` 0, `wLength`
-49.
-
-| Offset | Contents |
-|--------|----------|
-| 0–1 | entry for vector 0: the start counter (never cleared) |
-| 2n–2n+1 | number of times vector n was taken, n = 1 to 23, saturating at 0xffff |
-| 48 | last vector that hit a stub, 0xff for none |
-
-The census of vectors 2 bytes apart in `docs/hardware.md` ran with a table
-of 48 one word `RJMP`s, `make VECTORS=rjmp48` in commit bcc9f23; avr-libc's
-fixed table of 24 `JMP`s leaves no room for it.
-
-Vector 11 is the USB handler and counts its calls itself; every other
-vector of the 24 points to a stub that counts and returns with `RETI`. The
-firmware enables no interrupt source itself, so any count other than vector
-11 comes from a source that was enabled at reset or by the bootloader, or
-from the USB controller raising more than one vector. The start counter is
-kept in a part of SRAM that the startup code doesn't clear; it is restarted
-at 1 whenever its magic word doesn't match, which after power up is the
-likely case.
-
-### 0xf4: timing (experiment 11)
-
-`wValue` = N, `wIndex` 0, `wLength` 4.
-
-Runs a loop of exactly 1000 × N − 1 cycles with interrupts disabled before
-it answers, plus a constant overhead of the request handling. Reply: N
-(2 bytes) and the cycles per unit, 1000 (2 bytes). The host measures the
-duration of the request for two values of N; the difference divided by
-1000 × ΔN cycles gives the CPU clock, the constant overhead cancels. The
-cycle count assumes the timing of the classic AVR core: `LDI`, `NOP`, `DEC`
-1 cycle, `SBIW` 2, `BRNE` 2 when taken. At 30 MHz, N = 65535 takes about
-2.2 s; keep the host's timeout above that. USB events wait during the loop.
-
-### 0xf5: USB event log
-
-`wValue` bit 0 = clear the log after reading, `wIndex` 0, `wLength` 34.
-
-| Offset | Contents |
-|--------|----------|
-| 0 | index of the next entry to be written, 0–15 |
-| 1 | number of events since the last clear, saturating at 255 |
-| 2–33 | 16 entries of 2 bytes: event code from 0x1503, and 0x1502 as read for code 0x01 (0 for other codes) |
-
-The log is a ring; once more than 16 events were logged, the entry at the
-index of byte 0 is the oldest one.
-
-### 0xf6: crash record
-
-`wValue` 0, `wIndex` 0, `wLength` 70.
-
-| Offset | Contents |
-|--------|----------|
-| 0–1 | start counter |
-| 2–3 | `SP` at the reset vector, before the startup code set it, at the last restart without power loss |
-| 4 | where the last control request was at that restart: 0 done or none, 1 setup packet read, 2 IN request handled, 3 OUT data received, 4 OUT request handled, 5 status packet queued |
-| 5 | index of the next entry below |
-| 6–69 | the last 8 setup packets before that restart, 8 bytes each, a ring |
-
-The record lives in a part of SRAM that the startup code doesn't clear;
-`main()` copies it aside when it finds the start counter valid, which is a
-restart without power loss, before the next enumeration overwrites it.
-After a power cycle it is zero, unless the SRAM kept its contents over a
-short one.
-
-### 0xf7: interrupt record
-
-`wValue` 0, `wIndex` 0, `wLength` 71.
-
-| Offset | Contents |
-|--------|----------|
-| 0–3 | number of times vector 11 was taken |
-| 4 | 1 if the storm guard switched interrupts off for good |
-| 5 | number of entries below, up to 8 |
-| 6–37 | for the first 8 calls of vector 11: 0x1503, 0x1502, 0x151c and 0x1518 as read on entry |
-| 38 | number of entries below, up to 8 |
-| 39–70 | for the first 8 setup packets the main loop finds: 0x1503 read twice in a row, then 0x1502 read twice in a row |
-
-The second table is filled in every build; it showed that reading 0x1503
-or 0x1502 doesn't change them.
-
-The storm guard switches interrupts off for good when vector 11 was taken
-more than 50 times between two passes of the main loop, so that an
-interrupt that keeps firing leaves the firmware able to report it.
-
-### 0xf8: return addresses of vector 11
-
-`wValue` 0, `wIndex` 0, `wLength` 200, or 206 with `IRQ=1`. The ring is
-filled with `ISR_BARE=5` and `ISR_BARE=10` only.
-
-| Offset | Contents |
-|--------|----------|
-| 0–99 | the record as it was at the last restart without power loss |
-| 100–199 | the record now |
-| 200–205 | `IRQ=1` only: interrupts that entered the reset vector and were taken by the safety net, see [Building](#building), 0 so far since the main loop keeps interrupts disabled briefly: their number (saturating at 255), then for the last one SREG, SP less 3 (low byte first) and the return address on the stack (high byte first, a word address) |
-
-Each record:
-
-| Offset | Contents |
-|--------|----------|
-| 0 | number of entries ever written, wrapping at 256 |
-| 1 | number of handlers running right now |
-| 2 | the most that ever ran at once |
-| 3 | 0 |
-| 4–99 | a ring of 32 entries of 3 bytes: the return address the core pushed, as the two bytes on the stack (high byte first, a word address), and SREG as found in the handler |
-
-The record lives in a part of SRAM that the startup code doesn't clear,
-and is copied aside at a restart without power loss, before interrupts
-are enabled again. The firmware may hang rather than restart, so it is
-best read over and over while the firmware runs.
-
-### 0xf9: interrupt window (`ISR_BARE=9`)
-
-`wValue` the mode, `wIndex` the number of main loop passes to run the
-window for, `wLength` 282. A build with `ISR_BARE=9` (and `IRQ=0`) never
-enables interrupts except in `irq_window()` in `asm.S`, which the main
-loop runs once per pass while a window is requested: 50 rounds, each of
-which enables interrupts for a few instructions and disables them again.
-Its own handler of vector 11 records what each interrupt finds and returns
-with interrupts disabled whenever it is not inside the window, so that the
-rest of the firmware always runs with them disabled. This is how
-`docs/hardware.md` "Interrupt faults" was found.
-
-With `wIndex` not 0, the request clears the record, sets the mode and
-starts the window, which ends by itself after `wIndex` passes (up to 255).
-With `wIndex` 0 it only reads the record. The reply is the record of
-`win.h`, 280 bytes, and the byte address of `win_first`, the start of the
-window code, 2 bytes.
-
-The low byte of `wValue` (`WMODE_*` in `win.h`): bit 7 runs the window;
-bits 0–2 make the handler read 0x1503, 0x1502, and 0x151c and 0x1518;
-bit 3 closes the window with an `OUT` to SREG instead of `CLI`; bits 4–6
-put three `PUSH`es, three `POP`s, or calls and memory accesses into the
-window, each class opened by its own `SEI`. The high byte (`WMODE2_*`):
-bit 0 makes the window just `SEI` and the closing instruction; bit 7 makes
-it `SEI` and one instruction out of 26, number bits 4–0, of `wi_table` in
-`asm.S`. As the main loop runs with interrupts disabled, an interrupt
-pending when the window opens is taken on the instruction right after its
-`SEI`.
-
-Before each round the window sets the 24 bytes below its stack and `r24`,
-which the handler saves where the next return address would go, to 0xff.
-A return address the core did not write then reads 0xffxx; the handler
-counts it, notes it and returns to `win_lost`, which ends the round. The
-record (`WREC_*`): mode, entries logged, windows run, interrupts taken,
-rounds that ended with SP off and by how much, interrupts taken with the
-window closed and the return address of the last, rounds given up after
-100 interrupts, the window's SP, return addresses not written (count, what
-was found instead, and the word of the window the interrupt before it
-returned to), the second mode byte, the number of times I was found clear
-right after the instruction under test without the handler having run, a
-log of the first 64 interrupts (return address and SP relative to the
-window's) and the number of returns to each of the first 64 words of the
-window. `test-requests.py win` arms the window and decodes the record,
-for example `win 0x97 1 10` (`PUSH`es, one pass, ten times) or
-`win $(( 0x81 << 8 | 0x87 )) 1 10` (instruction 1, `PUSH`).
+The test requests (`bRequest` 0xf0 to 0xf9: identity, instruction tests,
+program memory read, interrupt census, timing, event log, crash record,
+interrupt and return address records, interrupt window), their host
+script `test-requests.py`, and the test builds (`ISR_BARE`, `ISR_EVENTS`,
+`PUSH_GUARD=0`, the interrupt window) with which this firmware ran
+experiments 8 to 12 of `docs/hardware.md` were removed once those were
+done. The last commit that has them is ff87b6c, "media: smi2021: upload
+OpenSMI21 instead of a vendor firmware"; the diagnostic build for the
+interrupts that entered the reset vector is in dba778e. To look at the
+device now, the register access requests reach its whole data space, see
+[`tools/bridge-probe`](../tools/bridge-probe/README.md).
 
 ## Checks
 
 `check.sh`, run by `make`, checks the output of `avr-objdump -d`:
 
 - the vector table: 24 `JMP`s at 0x0000–0x005c, vector 0 to the startup
-  code at 0x0060, vector 11 to the USB handler, all others to their census
-  handler;
-- the delay loop of the timing request counts down with a `DEC`. The
-  assembler sources go through the C preprocessor, and a backslash at the
-  end of a comment once made it swallow the `DEC` of both hand-written
-  delay loops, so that the first delay of the bring-up never ended; the
-  bring-up's delay is avr-libc's now;
-- the startup code: the stack pointer saved for the crash record, then
-  `SP` set to 0x0fff, `.data` copied with exactly one plain `ELPM`;
-- with `PUSH_GUARD=1`, every `PUSH` and `rcall .` outside the interrupt
-  handlers, the startup code's check for an interrupt that entered the
-  reset vector (which runs with I clear) and the interrupt window follows
-  a `CLI` or another such `PUSH`; it counts them;
+  code at 0x0060, the others to their handler or to avr-libc's
+  `__bad_interrupt`, which goes on to `__vector_default`;
+- the startup code: `SP` set to 0x0fff, `.data` copied with exactly one
+  plain `ELPM`;
+- every `PUSH` and `rcall .` outside the interrupt handlers and the
+  startup code's check for an interrupt that entered the reset vector
+  (both run with I clear) follows a `CLI` or another such `PUSH`; it
+  counts them;
 - no `MUL`, `MULS`, `MULSU`, `FMUL*`, `MOVW`, `ELPM` with a register,
   `LPM Rd, Z(+)`, `SPM`, `SLEEP`, `WDR`, `EIJMP`, `EICALL`, `BREAK` or `DES`
-  anywhere except the one deliberate instruction in each instruction test
-  function, and the plain `ELPM` only there, in `pm_read` and in the
-  startup code; it lists the deliberate ones;
+  anywhere, and the plain `ELPM` only in the startup code;
 - the image: a multiple of 62 bytes, at most 7502, starting with a `JMP`.
 
 ## Clean-room statement
@@ -643,38 +367,39 @@ Version 0.1 on an EasyCAP 002, uploaded through the bootloader with
   interrupts, from about 260000 control requests and five port resets in
   between, without a restart and with none through the reset vector, as
   fast as before. See `docs/hardware.md` "Interrupt faults".
-- **Test requests**: all of them work. Experiments 8 to 11 gave: only the
-  plain `ELPM` of the instructions tested works, program memory is 8 KB,
-  the CPU clock is 30.000 MHz; see `docs/hardware.md` "Experiments".
+- **Test requests** (since removed, see [Debugging](#debugging)): all of
+  them worked. Experiments 8 to 11 gave: only the plain `ELPM` of the
+  instructions tested works, program memory is 8 KB, the CPU clock is
+  30.000 MHz; see `docs/hardware.md` "Experiments".
 - **avr-libc**: built with avr-libc's startup code and delay loop instead
-  of its own, the firmware passed the same tests again: enumeration, all
-  test requests, the instruction tests, a read of the whole program memory
-  and the timing request.
-- **Not tried yet**: streaming in any mode, the register access requests
-  and i2c, alternate settings, the Linux driver on top of this firmware.
+  of its own, the firmware passed the same tests again.
+- **Linux driver**, with `IRQ=1`: steps 2 to 10 of
+  `tools/hw-test/run-tests.sh` in PAL and NTSC (load, enumeration, probe,
+  `v4l2-compliance`, video, audio, both, standard detection, input sweep)
+  and all of `tools/hw-test/stress.sh` in NTSC (rebind, stream cycles,
+  mode switches, a second user, the other ways of streaming). With the
+  default build of avr-gcc 16, without the test code and uploaded by the
+  driver: steps 4 to 10 in PAL. So register
+  access, i2c, modes 2 and 5 and the alternate settings work as far as the
+  driver uses them.
 
 ## Untested and risks
 
 Points most likely to need attention next:
 
-- **Interrupts**: `IRQ=1` has been tested with control transfers only.
-  Why an interrupt that waited long enters the reset vector is not known
-  for certain, and the test requests still disable interrupts for longer
-  than the main loop does; the safety net at the reset vector counts any
-  that do (0xf8). Streaming may change the pattern of interrupts. `IRQ=0`
-  stays the default.
+- **Interrupts**: why an interrupt that waited long enters the reset
+  vector is not known for certain; the safety net at the reset vector
+  takes any that still do. `IRQ=0` stays the default.
 - **Event handling inferred from the documents**: enumeration works, so
   clearing 0x1502 bit 4 by read-modify-write, the status stage of IN
   transfers that the hardware completes itself and the address change
-  after the status packet are right as far as enumeration exercises them.
-  Stalls and OUT data stages have not been exercised yet.
+  after the status packet are right as far as enumeration and the Linux
+  driver exercise them. Stalls have not been exercised on purpose.
 - **OUT data packets**: like the original, the firmware takes 64 bytes, or
   what is left of `wLength`, from each, and doesn't read 0x1517, which
   presumably holds the length of a received packet (inferred).
 - **Alternate setting 0 stopping the engines** has never been done by the
   vendor firmware; if streaming fails to restart, try `ALT0_STOP=0`.
-- **Timing request** keeps interrupts off for 1000 × N cycles, up to about
-  2.2 s at 30 MHz; a bus reset during it is handled late.
 - **Descriptors**: the fields the documents don't give are guesses that
   should not matter to the host; the power value, 500 mA, matches the
   vendor firmware's.
