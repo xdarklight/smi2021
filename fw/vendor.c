@@ -49,8 +49,8 @@
 /* Polls of the status register, some 20 ms at 30 MHz */
 #define I2C_TIMEOUT		50000u
 
-uint8_t cur_mode = MODE_TS;
-static uint8_t started_mode;
+enum mode cur_mode = MODE_TS;
+static enum mode started_mode;
 
 /*
  * Bytes 1 to 36 of the reply to a register access: i2c address, command,
@@ -145,6 +145,8 @@ void stream_start(void)
 		VIDEO_CTRL |= VIDEO_CTRL_START;
 		AUDIO_CTRL |= AUDIO_CTRL_START;
 		break;
+	case MODE_NONE:
+		break;
 	}
 	STREAM_CTRL |= STREAM_CTRL_ON;
 	started_mode = cur_mode;
@@ -172,10 +174,12 @@ void stream_stop(void)
 		VIDEO_CTRL &= ~VIDEO_CTRL_START;
 		AUDIO_CTRL &= ~AUDIO_CTRL_START;
 		break;
+	case MODE_NONE:
+		break;
 	}
-	if (started_mode)
+	if (started_mode != MODE_NONE)
 		STREAM_CTRL &= ~STREAM_CTRL_ON;
-	started_mode = 0;
+	started_mode = MODE_NONE;
 #endif
 }
 

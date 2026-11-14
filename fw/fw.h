@@ -62,12 +62,15 @@ extern uint8_t usb_alt;
 void usb_init(void);
 void usb_poll(void);
 
-/* vendor.c; modes of docs/protocol.md "Modes" */
-#define MODE_AUDIO		2	/* audio only */
-#define MODE_TS			3	/* presumably transport stream input */
-#define MODE_4			4	/* not known what for */
-#define MODE_CAPTURE		5	/* video and audio */
-extern uint8_t cur_mode;
+/* vendor.c; the modes of docs/protocol.md "Modes", one byte each */
+enum mode {
+	MODE_NONE = 0,		/* no stream started yet */
+	MODE_AUDIO = 2,		/* audio only */
+	MODE_TS,		/* presumably transport stream input */
+	MODE_4,			/* not known what for */
+	MODE_CAPTURE,		/* video and audio */
+};
+extern enum mode cur_mode;
 void stream_init(void);
 void stream_start(void);
 void stream_stop(void);
