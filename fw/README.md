@@ -80,7 +80,7 @@ with 0xff to a multiple of 62 bytes, as the bootloader takes it. The build
 fails if the image grows beyond 7502 bytes, the largest image known to
 work, though program memory is 8 KB. `make` also runs `check.sh`, see
 [Checks](#checks). Built with avr-gcc 7.3.0 and the defaults, version 0.1
-is 5736 bytes, 5766 padded (93 upload units); with `IRQ=1`, 6074 bytes,
+is 5724 bytes, 5766 padded (93 upload units); with `IRQ=1`, 6062 bytes,
 6076 padded (98 upload units).
 
 To use it with the Linux driver, install it in place of the vendor image:
@@ -101,7 +101,7 @@ unloaded:
 | `usb.c` | USB controller, control endpoint, standard requests, descriptors |
 | `vendor.c` | vendor requests: modes, streaming engines, register access, i2c |
 | `test.c` | test requests |
-| `asm.S` | delay loops, program memory reads, instruction tests, the interrupt window of `ISR_BARE=9` |
+| `asm.S` | the delay loop of the timing request, program memory reads, instruction tests, the interrupt window of `ISR_BARE=9` |
 | `win.h` | layout of the record of the interrupt window, request 0xf9 |
 | `pushguard.awk` | puts avr-gcc's `PUSH`es under `CLI`, see [Building](#building) |
 | `regs.h` | register addresses from `docs/hardware.md` |
@@ -121,8 +121,12 @@ unloaded:
 - **Bring-up**: the sequence of `docs/hardware.md` "Startup": `DDRA` = 0xff,
   status of both i2c engines 0, mode 3 prepared (0x1580 = 0x03, 0x1880 = 0),
   the USB controller set up with the documented values, `PC0` driven low,
-  and the soft disconnect: 200 units of 160 cycles, 0x1500 bit 3 set, 2000
-  units, bit 3 cleared.
+  and the soft disconnect: 200 units of the original's delay loop of about
+  160 cycles, 0x1500 bit 3 set, 2000 units, bit 3 cleared, waited out with
+  avr-libc's `_delay_us()` as 1067 and 10667 µs. As the firmware is built
+  with `-ffreestanding`, avr-libc takes its older loops for that instead of
+  `__builtin_avr_delay_cycles()`: 32008 and about 319400 cycles, as good
+  for a wait of which only the order of magnitude matters.
 - **USB events**: polled, as the original firmware does: the main loop and
   every wait of the control endpoint read 0x1503, which reading doesn't
   acknowledge, and record the event; the main loop handles it. With

@@ -11,6 +11,8 @@
  * control transfer gives up when a new setup packet or a bus reset arrives.
  */
 
+#include <util/delay.h>
+
 #include "fw.h"
 #include "regs.h"
 
@@ -791,9 +793,15 @@ void usb_init(void)
 	PORTC &= ~(1 << PC0);
 	DDRC |= 1 << PC0;
 
-	/* soft disconnect, so that the host enumerates the device again */
-	delay_160(200);
+	/*
+	 * Soft disconnect, so that the host enumerates the device again. The
+	 * original waits 200 and 2000 units of its delay loop of about 160
+	 * cycles, at 30 MHz about 1.07 and 10.7 ms; only the order of
+	 * magnitude matters, see docs/hardware.md "Startup". Interrupts are
+	 * still disabled here, so nothing stretches avr-libc's delays.
+	 */
+	_delay_us(1067);
 	USB_CTRL |= USB_CTRL_DISCONNECT;
-	delay_160(2000);
+	_delay_us(10667);
 	USB_CTRL &= ~USB_CTRL_DISCONNECT;
 }

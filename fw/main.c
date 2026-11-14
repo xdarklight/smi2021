@@ -9,8 +9,6 @@
  * already done step 1.
  */
 
-#include <util/delay_basic.h>
-
 #include "fw.h"
 #include "regs.h"
 
@@ -27,17 +25,6 @@ struct dbg_record dbg_now __attribute__((section(".noinit")));
 struct dbg_record dbg_crash;
 volatile struct ret_record retlog __attribute__((section(".noinit")));
 struct ret_record retlog_crash;
-
-/*
- * The delay unit of the original bring-up, about 160 cycles: 39 passes of
- * avr-libc's 4 cycle loop and the loop around it. Only the order of
- * magnitude matters, see docs/hardware.md "Startup".
- */
-void delay_160(uint16_t units)
-{
-	while (units--)
-		_delay_loop_2(39);
-}
 
 int main(void)
 {

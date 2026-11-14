@@ -106,9 +106,6 @@ uint8_t vendor_out(const struct setup *s, uint16_t len);
 /* test.c */
 uint8_t test_in(const struct setup *s, uint16_t *len);
 
-/* main.c */
-void delay_160(uint16_t units);			/* about 160 cycles per unit */
-
 /* asm.S */
 void delay_1000(uint16_t units);		/* exactly 1000 cycles per unit */
 void insn_mul(uint8_t *out);
