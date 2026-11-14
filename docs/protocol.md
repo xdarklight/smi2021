@@ -440,7 +440,7 @@ start audio and 0x00 to stop it.
 | Pin | Use |
 |-----|-----|
 | Port A | all outputs after start |
-| `PA7` | pulsed by the host during initialization |
+| `PA7` | pulsed by the host during initialization; on an EasyCAP 002, the reset of the decoder and the audio ADC, see [Initialization](#initialization) |
 | `PC0` | output, driven low when the USB controller is set up and on suspend; driven high by the host during initialization; set by the [port C request](#port-c-request) of `smi2021_3f.bin` |
 | `PC1` | set by the [port C request](#port-c-request) of `smi2021_3f.bin` |
 | `PC2` | made an output, along with `PC0`, by `smi2021_3f.bin` at start and on suspend |
@@ -469,11 +469,25 @@ The host's initialization sequence, a series of bridge register writes, is:
 10 ms after `PORTC` = 0x11, 100 ms after `PORTA` = 0x80 and 10 ms after
 the last write, so `PA7` is high for 100 ms (Windows driver). It runs the
 sequence again when it finds bit 4 of 0x3080 set after a suspend, clearing
-that bit and writing 0x00 to 0x1500 first (Windows driver). What the pins
-are connected
-to is not known; the authors of easycap-somagic-linux took `PC0` and `PC4`
-for the reset of the audio ADC and `PA7` for the reset of the decoder
-(reported, unconfirmed).
+that bit and writing 0x00 to 0x1500 first (Windows driver). The authors of
+easycap-somagic-linux took `PC0` and `PC4` for the reset of the audio ADC
+and `PA7` for the reset of the decoder (reported).
+
+Measured on an EasyCAP 002 with a multimeter, with each pin driven high
+and low in turn from the host (observed):
+
+- `PA7` resets both the decoder and the audio ADC. While it is high, the
+  SAA7113H's CE (pin 40) and the CS5340's RST (pin 9) are at 0 V, both
+  chips held in reset; while it is low, they are at 3.2 V and 3.3 V. As
+  `PA7` reads back low while driven high, it presumably drives the base of
+  a transistor that inverts it onto both lines (inferred). So the pulse of
+  the initialization resets both chips, and `PA7` must stay low.
+- `PC0` and `PC4` change none of these pins, nor the decoder's TRST
+  (pin 8), the ADC's mode pins M0 and M1 (pins 1 and 16), or the board's
+  LED. Where they go is not known.
+- The decoder's TRST is at 0 V, as the datasheet asks for a board without
+  boundary scan, and the ADC's M0 and M1 are at 0 V, which selects its
+  single speed master mode. The LED is lit all the time.
 
 ### Board identification
 
@@ -580,7 +594,8 @@ hardware for these and for the questions about the inside of the bridge.
 - What mode 4 streams, and the bits of 0x1580 other than 7.
 - The individual bits of the i2c engine commands, beyond bits 5, 6 and 7;
   bits 2 and 4 make no difference to reads.
-- Which chips the GPIO lines `PA7`, `PC0` and `PC4` are connected to.
+- What the GPIO lines `PC0` and `PC4` are connected to; `PA7` is the reset
+  of the decoder and the audio ADC.
 - The bootloader's behaviour beyond the requests listed above.
 
 ## Sources

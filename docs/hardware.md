@@ -775,7 +775,10 @@ With the original firmware:
    [Streaming engines](#streaming-engines); the PID filters were not
    programmed.
 7. **GPIO**: find what `PA7`, `PC0`, `PC1`, `PC2` and `PC4` are connected
-   to. Needs someone at the board with a multimeter; not done yet.
+   to. **Partly done** with a multimeter: `PA7` is the reset of the decoder
+   and the audio ADC; `PC0` and `PC4` reach neither chip's reset nor the
+   LED; see [Initialization](protocol.md#initialization). `PC1` and `PC2`
+   were not driven, `PC2` being the input of the board identification.
 
 With a test firmware, [`fw/`](../fw/README.md), on an EasyCAP 002 in
 November 2026:
