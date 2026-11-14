@@ -94,10 +94,8 @@ struct smi2021 {
 	struct video_device		vdev;
 	struct vb2_queue		vb_vidq;
 
-	/* Protects the v4l2 ioctls */
+	/* Protects the v4l2 ioctls, those of the videobuf2 queue included */
 	struct mutex			v4l2_lock;
-	/* Protects the videobuf2 queue */
-	struct mutex			vb_queue_lock;
 
 	/*
 	 * Protects the stream state below and the isochronous transfers. Held

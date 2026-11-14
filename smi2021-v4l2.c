@@ -576,7 +576,11 @@ static int smi2021_vb2_setup(struct smi2021 *smi2021)
 	q->buf_struct_size = sizeof(struct smi2021_buf);
 	q->ops = &smi2021_video_qops;
 	q->mem_ops = &vb2_vmalloc_memops;
-	q->lock = &smi2021->vb_queue_lock;
+	/*
+	 * The same lock as the other ioctls, so that S_STD can change the size
+	 * of the buffers once it has found that none are allocated.
+	 */
+	q->lock = &smi2021->v4l2_lock;
 	q->timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC;
 
 	return vb2_queue_init(q);

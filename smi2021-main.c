@@ -657,7 +657,6 @@ void smi2021_release(struct v4l2_device *v4l2_dev)
 
 	mutex_destroy(&smi2021->reg_lock);
 	mutex_destroy(&smi2021->v4l2_lock);
-	mutex_destroy(&smi2021->vb_queue_lock);
 	mutex_destroy(&smi2021->stream_lock);
 
 	ida_free(&smi2021_ida, smi2021->nr);
@@ -718,7 +717,6 @@ static int smi2021_usb_probe(struct usb_interface *intf,
 
 	mutex_init(&smi2021->reg_lock);
 	mutex_init(&smi2021->v4l2_lock);
-	mutex_init(&smi2021->vb_queue_lock);
 	mutex_init(&smi2021->stream_lock);
 	spin_lock_init(&smi2021->buf_lock);
 	INIT_LIST_HEAD(&smi2021->avail_bufs);
@@ -777,7 +775,6 @@ err_put:
 err_free:
 	mutex_destroy(&smi2021->reg_lock);
 	mutex_destroy(&smi2021->v4l2_lock);
-	mutex_destroy(&smi2021->vb_queue_lock);
 	mutex_destroy(&smi2021->stream_lock);
 	ida_free(&smi2021_ida, smi2021->nr);
 	kfree(smi2021);
@@ -797,7 +794,6 @@ static void smi2021_usb_disconnect(struct usb_interface *intf)
 	 * Wait for running ioctls to finish. Once the video device is
 	 * unregistered, no new ones can start.
 	 */
-	mutex_lock(&smi2021->vb_queue_lock);
 	mutex_lock(&smi2021->v4l2_lock);
 
 	scoped_guard(mutex, &smi2021->stream_lock) {
@@ -827,7 +823,6 @@ static void smi2021_usb_disconnect(struct usb_interface *intf)
 	}
 
 	mutex_unlock(&smi2021->v4l2_lock);
-	mutex_unlock(&smi2021->vb_queue_lock);
 
 	/* This calls smi2021_release() unless the device is still in use */
 	v4l2_device_put(&smi2021->v4l2_dev);
