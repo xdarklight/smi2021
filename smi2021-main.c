@@ -373,9 +373,8 @@ static enum smi2021_board_type smi2021_identify_board(struct smi2021 *smi2021)
 	if (!rc)
 		rc = smi2021_read_reg(smi2021, SMI2021_REG_PINC, &pinc);
 	if (rc) {
-		dev_warn(smi2021->dev,
-			 "failed to identify the board, offering all inputs: %pe\n",
-			 ERR_PTR(rc));
+		dev_warn_probe(smi2021->dev, rc,
+			       "failed to identify the board, offering all inputs\n");
 		return SMI2021_BOARD_UNKNOWN;
 	}
 
@@ -838,8 +837,8 @@ static int smi2021_usb_probe(struct usb_interface *intf,
 	 */
 	rc = smi2021_snd_register(smi2021);
 	if (rc)
-		dev_warn(smi2021->dev, "failed to register audio device: %pe\n",
-			 ERR_PTR(rc));
+		dev_warn_probe(smi2021->dev, rc,
+			       "failed to register audio device\n");
 
 	rc = smi2021_v4l2_register(smi2021);
 	if (rc)

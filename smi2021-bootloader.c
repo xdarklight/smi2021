@@ -49,42 +49,36 @@ static int smi2021_load_firmware(struct usb_device *udev,
 	size_t i;
 	int rc;
 
-	if (fw->size % sizeof(chunk.data)) {
-		dev_err(&udev->dev, "firmware has an invalid size\n");
-		return -EINVAL;
-	}
+	if (fw->size % sizeof(chunk.data))
+		return dev_err_probe(&udev->dev, -EINVAL,
+				     "firmware has an invalid size\n");
 
 	rc = smi2021_ctrl_read(udev, SMI2021_HW_STATE_HEAD, &state,
 			       sizeof(state));
-	if (rc) {
-		dev_err(&udev->dev, "failed to read the device state: %pe\n",
-			ERR_PTR(rc));
-		return rc;
-	}
+	if (rc)
+		return dev_err_probe(&udev->dev, rc,
+				     "failed to read the device state\n");
 
-	if (state.state != SMI2021_FW_READY) {
-		dev_err(&udev->dev, "device is not ready for a firmware upload\n");
-		return -ENODEV;
-	}
+	if (state.state != SMI2021_FW_READY)
+		return dev_err_probe(&udev->dev, -ENODEV,
+				     "device is not ready for a firmware upload\n");
 
 	for (i = 0; i < fw->size; i += sizeof(chunk.data)) {
 		memcpy(chunk.data, fw->data + i, sizeof(chunk.data));
 
 		rc = smi2021_ctrl_write(udev, chunk.head[0], &chunk,
 					sizeof(chunk));
-		if (rc) {
-			dev_err(&udev->dev, "firmware upload failed: %pe\n",
-				ERR_PTR(rc));
-			return rc;
-		}
+		if (rc)
+			return dev_err_probe(&udev->dev, rc,
+					     "firmware upload failed\n");
 	}
 
 	rc = smi2021_ctrl_write(udev, ack.head, &ack, sizeof(ack));
 	if (rc)
-		dev_err(&udev->dev, "device failed to ack the firmware: %pe\n",
-			ERR_PTR(rc));
+		return dev_err_probe(&udev->dev, rc,
+				     "device failed to ack the firmware\n");
 
-	return rc;
+	return 0;
 }
 
 int smi2021_bootloader_probe(struct usb_interface *intf)
@@ -94,11 +88,9 @@ int smi2021_bootloader_probe(struct usb_interface *intf)
 	int rc;
 
 	rc = request_firmware(&fw, SMI2021_FW_NAME, &udev->dev);
-	if (rc) {
-		dev_err(&udev->dev, "failed to load %s: %pe\n", SMI2021_FW_NAME,
-			ERR_PTR(rc));
-		return rc;
-	}
+	if (rc)
+		return dev_err_probe(&udev->dev, rc,
+				     "failed to load %s\n", SMI2021_FW_NAME);
 
 	rc = smi2021_load_firmware(udev, fw);
 	release_firmware(fw);
