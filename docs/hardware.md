@@ -230,14 +230,18 @@ of a function were followed by one whose return address was stale.
 11.** It arrives there with I clear and the return address pushed, which
 looks like a restart (observed). With every `PUSH` protected, the firmware
 still restarted by itself, after some hundred to a few thousand control
-transfers, each time with SP 0x0fe4 at the reset vector: the SP of the
+transfers, with the C handler as well as with an assembly handler that
+only reads the controller's registers while the main loop polls, and with
+requests of any one kind, the identity alone for example, which uses no
+`LPM`. Each time SP was 0x0fe4 at the reset vector: the SP of the
 main loop's function (0x0fe6) less the two bytes of a return address. A
 check at the reset vector that treated such an entry as vector 11 found
 46 of them in 191608 interrupts, each with I clear, SP 0x0fe4 and the
 return address on the stack pointing right after the call that enabled
 interrupts again in the main loop. Every one of them was the interrupt that
 had waited while the main loop had interrupts disabled, and was taken right
-after `SEI; RET`; it is not known why only that one.
+after `SEI; RET`; it is not known why only that one. It may take a request
+that waited that long, and ends right as it is taken (inferred).
 
 **Cause (inferred).** The core appears to be the AVR Core of opencores.org,
 see [CPU core](#cpu-core-1) under the comparison. In its 2006 sources, an
@@ -257,8 +261,13 @@ of the sources, which were not available.
 
 **The original firmware** meets neither fault as far as its code shows: its
 compiler keeps saved registers on a software stack, so the image has no
-`PUSH` or `POP`, and it never uses `CLI`. Whether it ever enters the
-reset vector from an interrupt is not known.
+`PUSH` or `POP`; its handler too saves its registers there, with `ST -Y`.
+It has one `SEI`, at the start, and no `CLI`: the main loop's call of the
+handler returns with `RETI` like the interrupt does, so I stays set except
+inside the handler, and the stack pointer is written only at reset. So an
+interrupt there is taken as soon as it is requested and never waits long,
+which may be why it doesn't meet the second fault (inferred); whether it
+ever enters the reset vector from an interrupt is not known.
 
 **For a replacement**, polling with interrupts disabled avoids both. One
 that enables interrupts has to:
