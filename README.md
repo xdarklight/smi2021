@@ -23,24 +23,22 @@ the device into its audio only mode, which leaves the video engine stopped.
 | `1c88:0007`             | bootloader, waiting for a firmware upload      |
 | `1c88:003c`–`1c88:003f` | running the firmware with the same number     |
 
-The USB ID after the upload depends on the firmware, not on the board, so the
-driver can not tell which inputs a board has. By default it offers all of
-them: four composite inputs and S-Video. The input status of
+The USB ID after the upload depends on the firmware, not on the board. Once
+the firmware runs, the driver identifies the board by its straps, as the
+vendor's Windows driver does (see Board identification in
+[`docs/protocol.md`](docs/protocol.md)), and offers the inputs it has:
+
+| Board        | Inputs                                       |
+|--------------|----------------------------------------------|
+| EasyCAP 002  | Video 1 to Video 4, as labelled              |
+| EasyCAP DC60 | composite and S-Video                        |
+| other        | all inputs: four composite inputs and S-Video |
+
+The kernel log names the board the driver found, as does
+`v4l2-ctl --log-status`. The EasyCAP 002 is confirmed on hardware; that the
+DC60 is the board the Windows driver programs with one composite and one
+S-Video input is inferred, as no DC60 has been tested. The input status of
 `VIDIOC_ENUMINPUT` shows whether the current input carries a signal.
-
-To offer only the inputs a board actually has, set the `card` module
-parameter for it. Devices are numbered from 0 in the order in which they
-appear; the kernel log shows each device's number.
-
-| `card` | Inputs                                   |
-|--------|------------------------------------------|
-| 0      | all inputs (default)                     |
-| 1      | EasyCAP DC60: composite and S-Video      |
-| 2      | EasyCAP 002: Video 1 to Video 4, as labelled |
-
-```bash
-modprobe smi2021 card=2
-```
 
 Inputs are selected with the standard V4L2 input API, for example:
 

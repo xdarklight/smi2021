@@ -14,7 +14,6 @@
 #include <linux/cleanup.h>
 #include <linux/device.h>
 #include <linux/ktime.h>
-#include <linux/moduleparam.h>
 
 #include <media/i2c/saa7115.h>
 #include <media/v4l2-common.h>
@@ -36,10 +35,8 @@
 #define SMI2021_TRC_F			BIT(6)	/* second field */
 
 /*
- * All inputs of the decoder that a board may have connected. The USB product
- * id depends on the firmware that was uploaded rather than on the board, so
- * the inputs of a board can not be detected; offer all of them unless the
- * card module parameter selects a board.
+ * All inputs of the decoder that a board may have connected, for a board
+ * that smi2021_identify_board() does not know.
  */
 static const struct smi2021_input smi2021_all_inputs[] = {
 	{ "Composite 0", SAA7115_COMPOSITE0 },
@@ -62,16 +59,9 @@ static const struct smi2021_input smi2021_easycap002_inputs[] = {
 	{ "Video 4", SAA7115_COMPOSITE1 },
 };
 
-/* Values of the card module parameter */
-enum smi2021_board_type {
-	SMI2021_BOARD_ALL_INPUTS,
-	SMI2021_BOARD_DC60,
-	SMI2021_BOARD_EASYCAP002,
-};
-
 static const struct smi2021_board smi2021_boards[] = {
-	[SMI2021_BOARD_ALL_INPUTS] = {
-		.name = "all inputs",
+	[SMI2021_BOARD_UNKNOWN] = {
+		.name = "unknown board, all inputs",
 		.inputs = smi2021_all_inputs,
 		.num_inputs = ARRAY_SIZE(smi2021_all_inputs),
 	},
@@ -86,27 +76,6 @@ static const struct smi2021_board smi2021_boards[] = {
 		.num_inputs = ARRAY_SIZE(smi2021_easycap002_inputs),
 	},
 };
-
-static unsigned int card[8];
-module_param_array(card, uint, NULL, 0444);
-MODULE_PARM_DESC(card,
-		 "Board of each device, by device number: 0 = all inputs (default), 1 = EasyCAP DC60, 2 = EasyCAP 002");
-
-static const struct smi2021_board *smi2021_get_board(struct smi2021 *smi2021)
-{
-	unsigned int type = SMI2021_BOARD_ALL_INPUTS;
-
-	if (smi2021->nr < ARRAY_SIZE(card))
-		type = card[smi2021->nr];
-
-	if (type >= ARRAY_SIZE(smi2021_boards)) {
-		dev_warn(smi2021->dev, "invalid card %u, offering all inputs\n",
-			 type);
-		type = SMI2021_BOARD_ALL_INPUTS;
-	}
-
-	return &smi2021_boards[type];
-}
 
 static const struct v4l2_file_operations smi2021_fops = {
 	.owner = THIS_MODULE,
@@ -134,12 +103,12 @@ static int smi2021_enum_input(struct file *file, void *priv,
 			      struct v4l2_input *i)
 {
 	struct smi2021 *smi2021 = video_drvdata(file);
+	const struct smi2021_board *board = &smi2021_boards[smi2021->board_type];
 
-	if (i->index >= smi2021->board->num_inputs)
+	if (i->index >= board->num_inputs)
 		return -EINVAL;
 
-	strscpy(i->name, smi2021->board->inputs[i->index].name,
-		sizeof(i->name));
+	strscpy(i->name, board->inputs[i->index].name, sizeof(i->name));
 	i->type = V4L2_INPUT_TYPE_CAMERA;
 	i->std = smi2021->vdev.tvnorms;
 
@@ -163,13 +132,14 @@ static int smi2021_g_input(struct file *file, void *priv, unsigned int *i)
 static int smi2021_s_input(struct file *file, void *priv, unsigned int i)
 {
 	struct smi2021 *smi2021 = video_drvdata(file);
+	const struct smi2021_board *board = &smi2021_boards[smi2021->board_type];
 	int rc;
 
-	if (i >= smi2021->board->num_inputs)
+	if (i >= board->num_inputs)
 		return -EINVAL;
 
 	rc = v4l2_subdev_call(smi2021->decoder, video, s_routing,
-			      smi2021->board->inputs[i].route, 0, 0);
+			      board->inputs[i].route, 0, 0);
 	if (rc)
 		return rc;
 
@@ -296,9 +266,8 @@ static int smi2021_log_status(struct file *file, void *priv)
 {
 	struct smi2021 *smi2021 = video_drvdata(file);
 
-	v4l2_info(&smi2021->v4l2_dev, "firmware %02x, %s\n",
-		  le16_to_cpu(smi2021->udev->descriptor.idProduct) & 0xff,
-		  smi2021->board->name);
+	v4l2_info(&smi2021->v4l2_dev, "device: %s\n",
+		  smi2021_boards[smi2021->board_type].name);
 	v4l2_ctrl_log_status(file, priv);
 	v4l2_device_call_all(&smi2021->v4l2_dev, 0, core, log_status);
 
@@ -637,7 +606,6 @@ int smi2021_v4l2_init(struct smi2021 *smi2021)
 {
 	int rc;
 
-	smi2021->board = smi2021_get_board(smi2021);
 	smi2021->cur_norm = V4L2_STD_NTSC;
 	smi2021->cur_height = SMI2021_NTSC_LINES;
 
@@ -680,6 +648,7 @@ int smi2021_v4l2_register(struct smi2021 *smi2021)
 		I2C_BOARD_INFO("saa7115_auto", SMI2021_DECODER_I2C_ADDR),
 		.platform_data = &smi2021_decoder_pdata,
 	};
+	const struct smi2021_board *board = &smi2021_boards[smi2021->board_type];
 	int rc;
 
 	/* The saa7115 driver tells a saa7113 from its gm7113c clone itself */
@@ -692,7 +661,7 @@ int smi2021_v4l2_register(struct smi2021 *smi2021)
 
 	v4l2_subdev_call(smi2021->decoder, video, s_std, smi2021->cur_norm);
 	v4l2_subdev_call(smi2021->decoder, video, s_routing,
-			 smi2021->board->inputs[smi2021->cur_input].route, 0, 0);
+			 board->inputs[smi2021->cur_input].route, 0, 0);
 
 	rc = smi2021_video_register(smi2021);
 	if (rc)

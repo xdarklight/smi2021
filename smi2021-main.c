@@ -10,11 +10,11 @@
  * Copyright (C) 2012 Ezequiel Garcia <elezegarcia@gmail.com>
  */
 
+#include <linux/bitfield.h>
 #include <linux/bits.h>
 #include <linux/build_bug.h>
 #include <linux/cleanup.h>
 #include <linux/delay.h>
-#include <linux/idr.h>
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/string.h>
@@ -61,6 +61,18 @@
  */
 #define SMI2021_REG_FLAG_BRIDGE		BIT(7)
 
+/* For a bridge register, smi2021_reg_msg.cntl reads instead of writing */
+#define SMI2021_BRIDGE_CMD_READ		BIT(5)
+
+/*
+ * Board identification, see docs/protocol.md: bits 7-6 of 0x31a5, which no
+ * firmware writes, and PC2 as an input are straps of the board.
+ */
+#define SMI2021_REG_BOARD_ID		0x31a5
+#define SMI2021_BOARD_ID_MASK		GENMASK(7, 6)
+#define SMI2021_BOARD_ID_OTHER_DECODER	2
+#define SMI2021_PINC_BOARD_STRAP	BIT(2)
+
 /* Commands of the bridge's i2c engine, for smi2021_reg_msg.cntl */
 #define SMI2021_I2C_CMD_WRITE_REG	0xc0	/* write subaddress and data */
 #define SMI2021_I2C_CMD_READ_REG	0xe0	/* write subaddress, read data */
@@ -80,6 +92,7 @@
  * The bridge's microcontroller is an AVR whose I/O registers match those of an
  * ATmega16, so these are its GPIO port registers.
  */
+#define SMI2021_REG_PINC		0x33
 #define SMI2021_REG_DDRC		0x34
 #define SMI2021_REG_PORTC		0x35
 #define SMI2021_REG_DDRA		0x3a
@@ -191,6 +204,33 @@ static int smi2021_write_reg(struct smi2021 *smi2021, u16 reg, u8 val)
 	guard(mutex)(&smi2021->reg_lock);
 
 	return smi2021_send_reg_msg(smi2021, &msg);
+}
+
+static int smi2021_read_reg(struct smi2021 *smi2021, u16 reg, u8 *val)
+{
+	const struct smi2021_reg_msg req = {
+		.head = SMI2021_REG_CTRL_HEAD,
+		.cntl = SMI2021_BRIDGE_CMD_READ,
+		.flags = SMI2021_REG_FLAG_BRIDGE | sizeof(req.data.bridge.reg),
+		.size = sizeof(req.data.bridge.val),
+		.data.bridge.reg = cpu_to_be16(reg),
+	};
+	struct smi2021_reg_msg reply;
+	int rc;
+
+	guard(mutex)(&smi2021->reg_lock);
+
+	rc = smi2021_send_reg_msg(smi2021, &req);
+	if (rc)
+		return rc;
+
+	rc = smi2021_ctrl_read(smi2021->udev, req.head, &reply, sizeof(reply));
+	if (rc)
+		return rc;
+
+	*val = reply.data.bridge.val;
+
+	return 0;
 }
 
 static int smi2021_i2c_write(struct smi2021 *smi2021, u8 addr, u8 reg, u8 val)
@@ -314,6 +354,38 @@ static int smi2021_initialize(struct smi2021 *smi2021)
 	}
 
 	return 0;
+}
+
+/*
+ * Tell the boards apart as the vendor's Windows driver does, after
+ * smi2021_initialize() has made PC2 an input. Its first board, which has
+ * another decoder, has 10 in bits 7-6 of 0x31a5; of the others, PC2 is high
+ * on the second, the EasyCAP 002 (bits 7-6 are 11 on it), and low on the
+ * third, presumably the EasyCAP DC60: a SAA7113 with one composite input
+ * on AI11 and S-Video, which is how the Windows driver programs it.
+ */
+static enum smi2021_board_type smi2021_identify_board(struct smi2021 *smi2021)
+{
+	u8 id, pinc;
+	int rc;
+
+	rc = smi2021_read_reg(smi2021, SMI2021_REG_BOARD_ID, &id);
+	if (!rc)
+		rc = smi2021_read_reg(smi2021, SMI2021_REG_PINC, &pinc);
+	if (rc) {
+		dev_warn(smi2021->dev,
+			 "failed to identify the board, offering all inputs: %pe\n",
+			 ERR_PTR(rc));
+		return SMI2021_BOARD_UNKNOWN;
+	}
+
+	dev_dbg(smi2021->dev, "board id 0x%02x, PINC 0x%02x\n", id, pinc);
+
+	if (FIELD_GET(SMI2021_BOARD_ID_MASK, id) == SMI2021_BOARD_ID_OTHER_DECODER)
+		return SMI2021_BOARD_UNKNOWN;
+
+	return pinc & SMI2021_PINC_BOARD_STRAP ? SMI2021_BOARD_EASYCAP002 :
+						 SMI2021_BOARD_DC60;
 }
 
 static void smi2021_process_packet(struct smi2021 *smi2021, const u8 *p,
@@ -667,9 +739,6 @@ static void smi2021_shutdown(struct smi2021 *smi2021)
 		smi2021->udev = NULL;
 }
 
-/* Allocates the device numbers */
-static DEFINE_IDA(smi2021_ida);
-
 void smi2021_release(struct v4l2_device *v4l2_dev)
 {
 	struct smi2021 *smi2021 = container_of(v4l2_dev, struct smi2021,
@@ -683,7 +752,6 @@ void smi2021_release(struct v4l2_device *v4l2_dev)
 	mutex_destroy(&smi2021->v4l2_lock);
 	mutex_destroy(&smi2021->stream_lock);
 
-	ida_free(&smi2021_ida, smi2021->nr);
 	kfree(smi2021);
 }
 
@@ -721,13 +789,6 @@ static int smi2021_usb_probe(struct usb_interface *intf,
 	if (!smi2021)
 		return -ENOMEM;
 
-	rc = ida_alloc(&smi2021_ida, GFP_KERNEL);
-	if (rc < 0) {
-		kfree(smi2021);
-		return rc;
-	}
-
-	smi2021->nr = rc;
 	smi2021->dev = &intf->dev;
 	smi2021->udev = udev;
 	smi2021->ifnum = alt->desc.bInterfaceNumber;
@@ -758,6 +819,8 @@ static int smi2021_usb_probe(struct usb_interface *intf,
 		goto err_put;
 	}
 
+	smi2021->board_type = smi2021_identify_board(smi2021);
+
 	smi2021->i2c_adap.owner = THIS_MODULE;
 	smi2021->i2c_adap.algo = &smi2021_i2c_algo;
 	smi2021->i2c_adap.dev.parent = smi2021->dev;
@@ -784,9 +847,6 @@ static int smi2021_usb_probe(struct usb_interface *intf,
 
 	usb_set_intfdata(intf, smi2021);
 
-	dev_info(smi2021->dev, "device %u, %s\n", smi2021->nr,
-		 smi2021->board->name);
-
 	return 0;
 
 err_snd:
@@ -802,7 +862,6 @@ err_free:
 	mutex_destroy(&smi2021->reg_lock);
 	mutex_destroy(&smi2021->v4l2_lock);
 	mutex_destroy(&smi2021->stream_lock);
-	ida_free(&smi2021_ida, smi2021->nr);
 	kfree(smi2021);
 
 	return rc;

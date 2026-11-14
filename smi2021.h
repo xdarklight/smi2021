@@ -70,6 +70,16 @@ struct smi2021_input {
 	u32				route;
 };
 
+/*
+ * The boards that smi2021_identify_board() tells apart by their straps, see
+ * Board identification in docs/protocol.md
+ */
+enum smi2021_board_type {
+	SMI2021_BOARD_UNKNOWN,		/* offers all inputs of the decoder */
+	SMI2021_BOARD_DC60,
+	SMI2021_BOARD_EASYCAP002,
+};
+
 struct smi2021_board {
 	const char			*name;
 	const struct smi2021_input	*inputs;
@@ -83,9 +93,8 @@ struct smi2021 {
 	 * held, so either of them keeps it from changing.
 	 */
 	struct usb_device		*udev;
-	/* Device number, which selects the card= module parameter */
-	unsigned int			nr;
-	const struct smi2021_board	*board;
+	/* Identified at probe, see smi2021_identify_board() */
+	enum smi2021_board_type		board_type;
 
 	/* Serializes register accesses, some of which take several requests */
 	struct mutex			reg_lock;

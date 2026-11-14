@@ -512,7 +512,13 @@ don't read it.
 
 On an EasyCAP 002, 0x31a5 reads 0xc8 after power-up, bits 7–6 `11`, and
 `PC2`, which `smi2021_3c.bin` leaves an input, reads high (observed). That
-makes it the second board, which matches its decoder and inputs.
+makes it the second board, which matches its decoder and inputs. The third
+board is presumably the EasyCAP DC60, a SAA7113 with one composite input on
+AI11 and S-Video, see [Inputs](#inputs) (inferred, from how the Windows
+driver programs it; no DC60 was tested). The Linux driver identifies the
+board this way after the upload, with `PC2` already an input, and offers
+the inputs of the EasyCAP 002 or the DC60 accordingly, and all inputs on
+the first board or when it can't tell.
 
 The boards differ in the video decoder (Windows driver):
 

@@ -23,9 +23,9 @@ varies, and Amlogic's is its own, so check the breakout before blaming the
 driver for a black picture.
 
 The device under test is the EasyCAP 002: four composite inputs labelled
-Video 1 to Video 4, and a single audio connector. `run-tests.sh` therefore
-loads the driver with `card=2`, and `SMI2021_INPUT` says which of the four
-connectors the cable is in, counted from zero.
+Video 1 to Video 4, and a single audio connector. The driver identifies it
+by itself, and `SMI2021_INPUT` says which of the four connectors the cable
+is in, counted from zero.
 
 `SMI2021_FIRMWARE` picks the firmware the driver uploads, by the USB product
 id it gives the device: 0x3c, the default, or 0x3f. The device keeps a

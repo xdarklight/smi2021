@@ -25,9 +25,6 @@ module=${SMI2021_MODULE:-$here/../../smi2021.ko}
 std=${SMI2021_STD:-ntsc}
 duration=${SMI2021_DURATION:-10}
 python=${SMI2021_PYTHON:-python3}
-# 2 is the EasyCAP 002, the board with four composite inputs labelled Video 1
-# to Video 4 and a single audio connector.
-card=${SMI2021_CARD:-2}
 # Which of those connectors the composite cable is actually in, counted from
 # 0, so that the input sweep knows which one should see a signal.
 connected=${SMI2021_INPUT:-0}
@@ -57,7 +54,7 @@ usage: $0 [--from N] [--only N] [--risky] [--list]
            it the run stops before them.
 
 Environment: SMI2021_RESULTS, SMI2021_CAPTURES, SMI2021_MODULE,
-SMI2021_STD (ntsc|pal), SMI2021_DURATION, SMI2021_CARD, SMI2021_INPUT,
+SMI2021_STD (ntsc|pal), SMI2021_DURATION, SMI2021_INPUT,
 SMI2021_FIRMWARE, SMI2021_CONNECTOR, SMI2021_AUDIO_OUT, SMI2021_PYTHON
 EOF
 	exit "${1:-0}"
@@ -121,7 +118,7 @@ load_module() {
 	for dep in $(modinfo -F depends "$module" | tr , ' '); do
 		modprobe "$dep" || { fail "could not load $dep"; return 1; }
 	done
-	insmod "$module" "card=$card" "firmware_version=$firmware" ||
+	insmod "$module" "firmware_version=$firmware" ||
 		{ fail 'insmod failed'; return 1; }
 }
 
