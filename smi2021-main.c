@@ -272,9 +272,9 @@ static const struct i2c_algorithm smi2021_i2c_algo = {
 static int smi2021_initialize(struct smi2021 *smi2021)
 {
 	/*
-	 * Pulse the GPIO lines PA7, PC0 and PC4, as the vendor driver does.
-	 * What they are connected to is not known; presumably these are the
-	 * reset inputs of the audio ADC and of the video decoder.
+	 * Set the GPIO lines as the vendor driver does. On an EasyCAP 002, PA7
+	 * high holds the video decoder and the audio ADC in reset, so this
+	 * pulses their reset; where PC0 and PC4 go is not known.
 	 */
 	static const struct {
 		u16 reg;
