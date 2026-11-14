@@ -489,16 +489,12 @@ static void smi2021_stop_stream(struct smi2021 *smi2021)
 	smi2021_kill_isoc(smi2021);
 	smi2021->stream_mode = SMI2021_MODE_STANDBY;
 
-	/* After a disconnect there is nothing left to tell the device */
-	if (smi2021->udev) {
-		if (mode == SMI2021_MODE_CAPTURE)
-			v4l2_subdev_call(smi2021->decoder, video, s_stream, 0);
+	if (mode == SMI2021_MODE_CAPTURE)
+		v4l2_subdev_call(smi2021->decoder, video, s_stream, 0);
 
-		smi2021_stop_engines(smi2021);
-		smi2021_set_mode(smi2021, SMI2021_MODE_STANDBY);
-		usb_set_interface(smi2021->udev, smi2021->ifnum,
-				  SMI2021_ALT_IDLE);
-	}
+	smi2021_stop_engines(smi2021);
+	smi2021_set_mode(smi2021, SMI2021_MODE_STANDBY);
+	usb_set_interface(smi2021->udev, smi2021->ifnum, SMI2021_ALT_IDLE);
 
 	smi2021_free_isoc(smi2021);
 }
@@ -650,6 +646,27 @@ void smi2021_stop_streaming(struct vb2_queue *vq)
 	smi2021_set_stream(smi2021);
 }
 
+/*
+ * Stop streaming for good, as the device is gone or the probe failed. The
+ * stream is stopped while the device can still be told, which a disconnect
+ * by unbinding the driver needs: alternate setting 0, which the USB core
+ * selects then, does not stop the engines. Once this returns, no URB is
+ * running and smi2021_set_stream() does not start any, so the pcm device can
+ * be unregistered and the register accesses refused.
+ */
+static void smi2021_shutdown(struct smi2021 *smi2021)
+{
+	guard(mutex)(&smi2021->stream_lock);
+
+	smi2021->video_wanted = false;
+	smi2021->audio_wanted = false;
+	smi2021_stop_stream(smi2021);
+	smi2021_clear_queue(smi2021, VB2_BUF_STATE_ERROR);
+
+	scoped_guard(mutex, &smi2021->reg_lock)
+		smi2021->udev = NULL;
+}
+
 /* Allocates the device numbers */
 static DEFINE_IDA(smi2021_ida);
 
@@ -773,6 +790,8 @@ static int smi2021_usb_probe(struct usb_interface *intf,
 	return 0;
 
 err_snd:
+	/* The pcm device may have started a stream already */
+	smi2021_shutdown(smi2021);
 	smi2021_snd_unregister(smi2021);
 err_put:
 	v4l2_device_put(&smi2021->v4l2_dev);
@@ -799,41 +818,15 @@ static void smi2021_usb_disconnect(struct usb_interface *intf)
 
 	/*
 	 * Wait for running ioctls to finish. Once the video device is
-	 * unregistered, no new ones can start.
+	 * unregistered, no new ones can start, so none can queue a buffer
+	 * after smi2021_shutdown() handed them all back.
 	 */
-	mutex_lock(&smi2021->v4l2_lock);
-
-	scoped_guard(mutex, &smi2021->stream_lock) {
-		smi2021_kill_isoc(smi2021);
-		smi2021_clear_queue(smi2021, VB2_BUF_STATE_ERROR);
+	scoped_guard(mutex, &smi2021->v4l2_lock) {
+		smi2021_shutdown(smi2021);
+		smi2021_v4l2_unregister(smi2021);
 	}
 
-	smi2021_v4l2_unregister(smi2021);
-
-	/*
-	 * This stops a stream that the pcm device started and makes sure that
-	 * its trigger work can not start another one.
-	 */
 	smi2021_snd_unregister(smi2021);
-
-	scoped_guard(mutex, &smi2021->stream_lock) {
-		/*
-		 * Tell smi2021_set_stream() and the register accesses that the
-		 * device is gone
-		 */
-		scoped_guard(mutex, &smi2021->reg_lock)
-			smi2021->udev = NULL;
-		smi2021->video_wanted = false;
-		smi2021->audio_wanted = false;
-
-		/*
-		 * smi2021_stop_streaming() only runs if a video capture was
-		 * running, so free what is left here.
-		 */
-		smi2021_stop_stream(smi2021);
-	}
-
-	mutex_unlock(&smi2021->v4l2_lock);
 
 	/* This calls smi2021_release() unless the device is still in use */
 	v4l2_device_put(&smi2021->v4l2_dev);

@@ -287,6 +287,10 @@ err_free_card:
 	return rc;
 }
 
+/*
+ * The completion handler uses pcm_substream, so the URBs must have been
+ * stopped for good before calling this, see smi2021_shutdown().
+ */
 void smi2021_snd_unregister(struct smi2021 *smi2021)
 {
 	if (!smi2021->snd_card)
@@ -294,10 +298,13 @@ void smi2021_snd_unregister(struct smi2021 *smi2021)
 
 	/*
 	 * This stops the stream and prevents any further pcm callback except
-	 * for close, without waiting for userspace to close the device.
+	 * for close, without waiting for userspace to close the device. The
+	 * trigger work uses the substream, so it has to be done with before
+	 * the card can be freed.
 	 */
-	snd_card_free_when_closed(smi2021->snd_card);
+	snd_card_disconnect(smi2021->snd_card);
 	cancel_work_sync(&smi2021->pcm_trigger_work);
+	snd_card_free_when_closed(smi2021->snd_card);
 
 	smi2021->snd_card = NULL;
 	smi2021->pcm_substream = NULL;
