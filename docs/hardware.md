@@ -544,7 +544,7 @@ so presumably the hardware clears them by itself on resume (inferred).
 | 0x1510 | bits 2–1: 00 for normal operation, 10 to stall |
 | 0x1511 | written 0x03 at start |
 | 0x1513, 0x1515 | written 0x40 at start (inferred: the maximum packet size of each direction) |
-| 0x1517 | never read by the firmware; by the layout of the endpoint blocks, presumably the length of a received packet (inferred) |
+| 0x1517 | length of the last packet received, 0 to 64; never read by the firmware |
 | 0x1518 | bit 7: the receive buffer holds a packet; the firmware clears it to free the buffer |
 | 0x1519–0x151a | address of the receive buffer, little endian, 0x2000 |
 | 0x151b | number of bytes to send |
@@ -560,7 +560,10 @@ memory). The firmware handles a control transfer as follows:
 - **OUT data stage**: for each packet, the firmware waits for 0x1518
   bit 7, copies the data from 0x2000 and clears bit 7. It never reads a
   length register; it relies on each packet holding 64 bytes, or what
-  remains of `wLength`.
+  remains of `wLength`. The length is in 0x1517 (observed, on an EasyCAP
+  002): read during register access requests of 7 to 288 bytes, it held
+  the length of the last packet of each, 1 to 64, the bytes beyond the
+  last full 64, and it still did after 0x1518 bit 7 had been cleared.
 - **IN data stage**: for each packet, the firmware waits for 0x151c bit 7
   to clear, puts up to 64 bytes at 0x2040, writes the length to 0x151b and
   sets bit 7. To send a descriptor that it assembled at 0x2040 and up in
