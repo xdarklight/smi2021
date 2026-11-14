@@ -87,9 +87,9 @@ function hex(s,   i, v) {
 
 	# a PUSH is safe after a CLI or after a safe PUSH
 	if (insn == "push" || (insn == "rcall" && args ~ /^\.\+0[^0-9]/)) {
-		# __init: only after it found I clear, see isr.S
+		# __init, v0_*: only after it found I clear, see isr.S
 		if (fn ~ /^__vector_[0-9]+$/ || fn == "census_common" ||
-		    fn == "__init")
+		    fn == "__init" || fn ~ /^v0_/)
 			;
 		else if (fn == "win_first" || fn ~ /^wi_/)
 			unguarded_test++

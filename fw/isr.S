@@ -17,46 +17,59 @@
 
 #if FW_IRQ
 /*
- * An interrupt that ends at the reset vector instead of its own. The core
- * presumably takes the vector address from the interrupt request lines as
- * they are when it jumps, and finds none left if the request ended in the
- * cycle after the interrupt started (docs/hardware.md "Interrupt faults"):
- * then it enters the reset vector, with I clear and the return address on
- * the stack. Seen from here: I clear, the firmware running already (boot_magic
- * set, SP in its stack, 0x0fxx) and a return address into the program on
- * top of the stack. Then this is no restart: count it, note it, and do what
- * the core should have done, enter the handler of vector 11. Nothing goes
- * onto the stack before SP is known to be the firmware's.
+ * An interrupt that ends at the reset vector instead of its own
+ * (docs/hardware.md "Interrupt faults"): the core enters the reset vector
+ * with I clear and the return address on the stack. The firmware keeps its
+ * windows with interrupts disabled short, which avoids it, so this is the
+ * safety net. Seen from here: I clear, interrupts armed (irq_armed, see
+ * fw.h), the firmware running already (boot_magic set), SP within its
+ * stack, from the end of the data to 0x0ffd, and a return address into the
+ * program on top of the stack. Then this is no restart: count it, note it,
+ * and do what the core should have done, enter the handler of vector 11.
+ * Nothing goes onto the stack before SP is known to be the firmware's.
  */
 	.section .bss
 	.global	vec0_rec
 vec0_rec:			/* count, SREG, SPL, SPH (less 3), return address */
 	.skip	6
 vec0_tmp:
-	.skip	2
-#if FW_IRQDIAG
-	.global	vec0_flag
-	.global	vec0_regs
-vec0_flag:			/* set here, taken by the handler */
+	.skip	3
+	.global	irq_armed
+irq_armed:
 	.skip	1
-vec0_regs:			/* 0x1503 and 0x1502 as found here */
-	.skip	2
-#endif
 	.section .init1, "ax", @progbits
 	sts	vec0_tmp, r24
 	in	r24, SREG_IO
 	sts	vec0_tmp + 1, r24
 	sbrc	r24, 7
 	rjmp	9f
-	in	r24, SPH_IO
-	cpi	r24, 0x0f
-	brne	9f
+	/* the block is too long for a branch to 9: from here */
+	lds	r24, irq_armed
+	tst	r24
+	brne	v0_armed
+	rjmp	9f
+v0_armed:
 	lds	r24, boot_magic
 	cpi	r24, 0x53
-	brne	9f
+	brne	v0_no
 	lds	r24, boot_magic + 1
 	cpi	r24, 0x4f
-	brne	9f
+	breq	v0_magic
+v0_no:
+	rjmp	9f
+v0_magic:
+	sts	vec0_tmp + 2, r25
+	in	r24, SPL_IO		/* SP at or above the end of the data */
+	in	r25, SPH_IO
+	subi	r24, lo8(__noinit_end)
+	sbci	r25, hi8(__noinit_end)
+	brlo	v0_no
+	in	r24, SPL_IO		/* and below 0x0ffe */
+	in	r25, SPH_IO
+	subi	r24, 0xfe
+	sbci	r25, 0x0f
+	brsh	v0_no
+	lds	r25, vec0_tmp + 2
 	push	r25
 	push	r30
 	push	r31
@@ -76,14 +89,6 @@ vec0_regs:			/* 0x1503 and 0x1502 as found here */
 	sts	vec0_rec + 3, r24
 	lds	r24, vec0_tmp + 1
 	sts	vec0_rec + 1, r24
-#if FW_IRQDIAG
-	lds	r24, 0x1503
-	sts	vec0_regs, r24
-	lds	r24, 0x1502
-	sts	vec0_regs + 1, r24
-	ldi	r24, 1
-	sts	vec0_flag, r24
-#endif
 	lds	r24, vec0_rec
 	inc	r24
 	breq	1f

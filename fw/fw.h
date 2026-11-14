@@ -125,9 +125,24 @@ uint8_t flash_byte(const void *addr);	/* plain LPM */
 /* Linker symbols */
 extern const uint8_t __image_end[];
 
+#if FW_IRQ
+/*
+ * isr.S: 1 while interrupts may be enabled. irq_on() sets it before the
+ * SEI and the handler of vector 11 before it returns; irq_off() clears it
+ * after the CLI, and so does the handler on entry. The check at the reset
+ * vector only takes an entry there for an interrupt while it is set, so
+ * that a jump to 0x0000 from code running with interrupts disabled
+ * restarts the firmware instead of being resumed.
+ */
+extern volatile uint8_t irq_armed;
+#endif
+
 static inline void irq_off(void)
 {
 	cli();
+#if FW_IRQ
+	irq_armed = 0;
+#endif
 }
 
 /* Interrupt test, request 0xf7 */
@@ -176,59 +191,16 @@ void irq_window(void);				/* asm.S */
 void irq_window_pass(void);			/* test.c */
 extern const uint8_t win_first[];		/* asm.S, start of the window */
 
-/*
- * IRQDIAG=1, request 0xfa: each place that enables interrupts sets
- * irq_spot first, and clears it again a few instructions after; the
- * handler counts the interrupts taken there, and those of them that came
- * through the reset vector (isr.S). knob holds the switches for the place
- * in usb_poll(), see irq_enable_diag() in asm.S and KNOB_SERVICE.
- */
-#define SPOT_OTHER	0
-#define SPOT_POLL_NEW	1	/* usb_poll(), after it recorded a new event */
-#define SPOT_POLL	2	/* usb_poll(), nothing new */
-#define SPOT_ABORTED	3	/* ctrl_aborted(), restoring SREG */
-#define SPOT_EP0_TX	4	/* ep0_tx() */
-#define SPOT_TEST	5	/* test requests */
-#define NUM_SPOTS	6
-#define KNOB_SERVICE	0x20	/* usb_poll() leaves the events to the handler,
-				   but for every 64th pass */
-#define KNOB_MINIMAL	0x40	/* usb_poll() leaves the events to the handler
-				   and disables interrupts only to take
-				   usb_events: no storm guard, no polling */
-struct irq_diag {
-	uint8_t knob;
-	uint8_t last_spot;		/* of the last one through the reset vector */
-	uint8_t last_1503;		/* 0x1503 and 0x1502 as it found them */
-	uint8_t last_1502;
-	uint32_t total;			/* interrupts */
-	uint32_t taken[NUM_SPOTS];	/* of them at each place */
-	uint16_t vec0[NUM_SPOTS];	/* of them through the reset vector */
-};
-#if FW_IRQDIAG
-#if !FW_IRQ
-#error "IRQDIAG=1 needs IRQ=1"
-#endif
-extern volatile struct irq_diag irqdiag;
-extern volatile uint8_t irq_spot;
-extern volatile uint8_t vec0_flag;		/* isr.S */
-extern volatile uint8_t vec0_regs[2];		/* isr.S */
-void irq_enable_diag(uint8_t knob);		/* asm.S */
-#endif
-
 static inline void irq_on(void)
 {
 #if FW_IRQ
-	if (!irqrec.storm)
+	if (!irqrec.storm) {
+		irq_armed = 1;
 		sei();
+	}
 #else
 	__asm__ __volatile__ ("" ::: "memory");
 #endif
 }
-
-#if FW_IRQDIAG
-#define irq_on_at(spot)	do { irq_spot = (spot); irq_on(); irq_spot = 0; } while (0)
-#else
-#define irq_on_at(spot)	irq_on()
-#endif
 
 #endif /* OPENSMI21_FW_H */

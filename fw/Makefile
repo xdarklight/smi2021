@@ -22,9 +22,6 @@
 #                              where it returns to (0xf9)
 #   make IRQ=1 ISR_BARE=10     vector 11 notes its return address (0xf8),
 #                              then runs the C handler
-#   make IRQ=1 IRQDIAG=1       statistics of the interrupts per place that
-#                              enables them, and switches for the place in
-#                              usb_poll() (0xfa)
 #   make PUSH_GUARD=0          leave the PUSHes of avr-gcc unguarded: with
 #                              IRQ=1, the firmware then fails (interrupt test)
 
@@ -38,7 +35,6 @@ ALT0_STOP	?= 1
 IRQ		?= 0
 ISR_EVENTS	?= 1
 ISR_BARE	?= 0
-IRQDIAG		?= 0
 PUSH_GUARD	?= 1
 
 # Largest image known to work, 121 upload units of 62 bytes
@@ -56,10 +52,8 @@ CFLAGS		:= $(ARCH) -Os -std=gnu99 -Wall -Wextra -Werror=implicit \
 		   -ffunction-sections -fdata-sections -fshort-enums \
 		   -DFW_PID=$(PID) -DFW_ALT0_STOP=$(ALT0_STOP) -DFW_IRQ=$(IRQ) -DFW_ISR_EVENTS=$(ISR_EVENTS) \
 		   -DFW_ISR_BARE=$(ISR_BARE) -DFW_PUSH_GUARD=$(PUSH_GUARD) \
-		   -DFW_IRQDIAG=$(IRQDIAG) \
 		   -DF_CPU=30000000UL -g
-ASFLAGS		:= $(ARCH) -DFW_ISR_BARE=$(ISR_BARE) -DFW_IRQ=$(IRQ) \
-		   -DFW_IRQDIAG=$(IRQDIAG) -g
+ASFLAGS		:= $(ARCH) -DFW_ISR_BARE=$(ISR_BARE) -DFW_IRQ=$(IRQ) -g
 LDFLAGS		:= $(ARCH) -Wl,-T,opensmi21.ld \
 		   -Wl,--gc-sections -Wl,-Map,$(B)/opensmi21.map
 

@@ -222,63 +222,6 @@ insn_movw:
 	ELPM_TEST insn_elpm_z, OP_ELPM_R18_Z, r18, r0
 	ELPM_TEST insn_elpm_zp, OP_ELPM_R18_ZP, r18, r0
 
-#if FW_IRQDIAG
-/*
- * void irq_enable_diag(uint8_t knob), IRQDIAG=1: irq_on() for the place in
- * usb_poll(), with the switches of request 0xfa: bits 4-2 of knob, k, a
- * delay before the SEI, with interrupts still disabled, of 4^(k-1) loops
- * of 4 cycles (none for 0, 16384 cycles for 7); bits 1-0 what follows the
- * SEI: 0 RET, as irq_on(), 1 NOP and RET, 2 two NOPs and RET; 3 sets I
- * with an OUT to SREG instead of SEI, as pushguard.awk's code does, then
- * RET. Labels named, not numbered: see the window code below.
- */
-	.global	irq_enable_diag
-irq_enable_diag:
-	lds	r25, irqrec + 4		/* the storm guard tripped */
-	tst	r25
-	brne	ied_out
-	mov	r25, r24
-	andi	r25, 0x1c
-	breq	ied_go
-	ldi	r26, 1
-	ldi	r27, 0
-ied_shift:
-	subi	r25, 4
-	breq	ied_wait
-	lsl	r26
-	rol	r27
-	lsl	r26
-	rol	r27
-	rjmp	ied_shift
-ied_wait:
-	sbiw	r26, 1
-	brne	ied_wait
-ied_go:
-	sbrs	r24, 1
-	rjmp	ied_zero_one
-	sbrs	r24, 0
-	rjmp	ied_two
-	in	r25, 0x3f
-	ori	r25, 0x80
-	out	0x3f, r25
-	ret
-ied_zero_one:
-	sbrc	r24, 0
-	rjmp	ied_one
-	sei
-	ret
-ied_one:
-	sei
-	nop
-	ret
-ied_two:
-	sei
-	nop
-	nop
-ied_out:
-	ret
-#endif
-
 #if FW_ISR_BARE == 9
 #include "win.h"
 

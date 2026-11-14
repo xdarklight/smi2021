@@ -40,8 +40,10 @@ and Ubuntu that is `gcc-avr`, `binutils-avr` and `avr-libc`; on Arch Linux
     make PUSH_GUARD=0                 # leave avr-gcc's PUSHes unprotected
 
 `IRQ=0`, the default, never enables interrupts and polls the controller.
-`IRQ=1` enables them and handles USB events in vector 11 as well. The core
-has two faults that a firmware with interrupts enabled has to work around
+`IRQ=1` enables them and services the USB events in vector 11; the main
+loop only takes what the handler recorded, and polls the controller only
+if the storm guard has switched interrupts off for good. The core has two
+faults that a firmware with interrupts enabled has to take care of
 (`docs/hardware.md` "Interrupt faults"), and `IRQ=1` does:
 
 - every run of `PUSH`es that avr-gcc writes, and every `rcall .`, is put
@@ -49,24 +51,37 @@ has two faults that a firmware with interrupts enabled has to work around
   which the build runs on the compiler's assembly (`PUSH_GUARD=1`, the
   default; with `IRQ=0` it costs a few bytes and is harmless). Interrupt
   handlers (`__vector_N`) are left alone, as they run with I clear;
-- the startup code takes an entry at the reset vector with I clear,
-  `boot_magic` set, SP in the firmware's stack and a return address into
-  the program on top of the stack for an interrupt that ended up there,
-  counts it (see 0xf8) and enters vector 11's handler instead of
-  restarting.
+- an interrupt requested while interrupts are disabled for more than a
+  few dozen cycles may enter the reset vector when they are enabled again.
+  So the main loop disables them for some 22 cycles only, to take
+  `usb_events`, and `ctrl_aborted()`, which the waits of the control
+  endpoint call, likewise; the storm guard reads its counter of interrupts
+  with interrupts enabled. The test requests still disable them for longer
+  while they copy their replies;
+- as a safety net, the startup code takes an entry at the reset vector
+  with I clear, `irq_armed` set, `boot_magic` set, SP within the stack
+  (from `__noinit_end` to 0x0ffd) and a return address into the program
+  on top of the stack for an interrupt that ended up there, counts it (see
+  0xf8) and enters vector 11's handler instead of restarting. `irq_armed`
+  is set before every `SEI` and before the handler returns, and cleared by
+  `irq_off()` and on the handler's entry, so that a jump to 0x0000 from
+  code running with interrupts disabled restarts the firmware.
 
-Without the first, `IRQ=1` fails within a few control transfers; without
-the second, it restarts by itself every few thousand. `ISR_EVENTS` and `ISR_BARE` only matter for the
-interrupt tests, see 0xf3, 0xf7, 0xf8 and 0xf9 under [Test
-requests](#test-requests).
+Without the first, `IRQ=1` fails within a few control transfers. With the
+main loop polling the controller with interrupts disabled for some 60
+cycles or more, as `IRQ=0` does, about one interrupt in 4000 came through
+the reset vector; the safety net kept the firmware running then.
+
+`ISR_EVENTS` and `ISR_BARE` only matter for the interrupt tests, see 0xf3,
+0xf7, 0xf8 and 0xf9 under [Test requests](#test-requests).
 
 The result is `build/opensmi21.bin`: a plain image from address 0, padded
 with 0xff to a multiple of 62 bytes, as the bootloader takes it. The build
 fails if the image grows beyond 7502 bytes, the largest image known to
 work, though program memory is 8 KB. `make` also runs `check.sh`, see
 [Checks](#checks). Built with avr-gcc 7.3.0 and the defaults, version 0.1
-is 5736 bytes, 5766 padded (93 upload units); with `IRQ=1`, 5958 bytes,
-6014 padded (97 upload units).
+is 5736 bytes, 5766 padded (93 upload units); with `IRQ=1`, 6074 bytes,
+6076 padded (98 upload units).
 
 To use it with the Linux driver, install it in place of the vendor image:
 
@@ -111,8 +126,8 @@ unloaded:
 - **USB events**: polled, as the original firmware does: the main loop and
   every wait of the control endpoint read 0x1503, which reading doesn't
   acknowledge, and record the event; the main loop handles it. With
-  `IRQ=1`, vector 11 does the same, and the main loop disables interrupts
-  where it reads or changes what the handler writes. Setup packet (0x01 with 0x1502 bit 4: the handler
+  `IRQ=1`, vector 11 records the events instead, and the main loop only
+  takes them, see [Building](#building). Setup packet (0x01 with 0x1502 bit 4: the handler
   clears the bit and withdraws a pending packet by clearing 0x151c bit 7),
   speed detected (0x80: maximum packet size of blocks A and B 0x0400 at high
   speed, 0x03ff otherwise), bus reset (0x81), suspend (0x85: `PC0` low,
@@ -250,9 +265,9 @@ following:
 16. **Requests without data**: an OUT vendor request without a data stage
     is acknowledged without doing anything; an IN request with `wLength` 0
     gets a zero length packet.
-17. **Interrupts** stay disabled by default (`IRQ=0`): polling is what the
-    original does in effect, and it needs no workaround of the core's
-    faults. `IRQ=1` has been tested with control transfers only.
+17. **Interrupts** stay disabled by default (`IRQ=0`): it needs nothing
+    of the core's faults taken care of, and has been tested the longest.
+    `IRQ=1` has been tested with control transfers only.
 
 ## Test requests
 
@@ -449,7 +464,7 @@ filled with `ISR_BARE=5` and `ISR_BARE=10` only.
 |--------|----------|
 | 0–99 | the record as it was at the last restart without power loss |
 | 100–199 | the record now |
-| 200–205 | `IRQ=1` only: interrupts that entered the reset vector, see [Building](#building): their number (saturating at 255), then for the last one SREG, SP less 3 (low byte first) and the return address on the stack (high byte first, a word address) |
+| 200–205 | `IRQ=1` only: interrupts that entered the reset vector and were taken by the safety net, see [Building](#building), 0 so far since the main loop keeps interrupts disabled briefly: their number (saturating at 255), then for the last one SREG, SP less 3 (low byte first) and the return address on the stack (high byte first, a word address) |
 
 Each record:
 
@@ -610,8 +625,14 @@ Version 0.1 on an EasyCAP 002, uploaded through the bootloader with
   191608 interrupts, 46 of them through the reset vector. The plain
   `IRQ=1` build passed the same: 190983 interrupts, 34 of them through the
   reset vector, all at the same place, right after `irq_on()` in
-  `usb_poll()`; the timing request still measured 30 MHz. See
-  `docs/hardware.md` "Interrupt faults".
+  `usb_poll()`; the timing request still measured 30 MHz. A test build
+  that counted interrupts per place that enables them, with switches for
+  that place, showed that they were the ones requested while the main
+  loop had interrupts disabled for 60 cycles or more, and that disabling
+  them for some 25 cycles only avoids it. With that, `IRQ=1` ran 786436
+  interrupts, from about 260000 control requests and five port resets in
+  between, without a restart and with none through the reset vector, as
+  fast as before. See `docs/hardware.md` "Interrupt faults".
 - **Test requests**: all of them work. Experiments 8 to 11 gave: only the
   plain `ELPM` of the instructions tested works, program memory is 8 KB,
   the CPU clock is 30.000 MHz; see `docs/hardware.md` "Experiments".
@@ -626,10 +647,12 @@ Version 0.1 on an EasyCAP 002, uploaded through the bootloader with
 
 Points most likely to need attention next:
 
-- **Interrupts**: `IRQ=1` works around two faults of the core, and has
-  been tested with control transfers only; why only one particular
-  interrupt enters the reset vector is not known, so there may be other
-  ways to meet it. `IRQ=0` stays the default.
+- **Interrupts**: `IRQ=1` has been tested with control transfers only.
+  Why an interrupt that waited long enters the reset vector is not known
+  for certain, and the test requests still disable interrupts for longer
+  than the main loop does; the safety net at the reset vector counts any
+  that do (0xf8). Streaming may change the pattern of interrupts. `IRQ=0`
+  stays the default.
 - **Event handling inferred from the documents**: enumeration works, so
   clearing 0x1502 bit 4 by read-modify-write, the status stage of IN
   transfers that the hardware completes itself and the address change

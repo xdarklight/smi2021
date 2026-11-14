@@ -125,12 +125,6 @@ static const char str_serial[] PROGMEM = "OPENSMI21-" FW_VERSION_STR;
 
 static uint8_t last_code;
 
-#if FW_IRQDIAG
-volatile struct irq_diag irqdiag;
-volatile uint8_t irq_spot;
-static uint8_t chk_new;		/* usb_check_events() recorded something */
-#endif
-
 /*
  * docs/hardware.md "Interrupt": the event code in 0x1503 is not
  * acknowledged by reading it and stays until the next event, so this is
@@ -185,9 +179,6 @@ static void usb_check_events(void)
 	last_code = code;
 	if (!log)
 		return;
-#if FW_IRQDIAG
-	chk_new = 1;
-#endif
 	evlog[pos * 2] = code;
 	evlog[pos * 2 + 1] = status;
 	evlog_pos = (pos + 1) & (EVLOG_SIZE - 1);
@@ -196,6 +187,11 @@ static void usb_check_events(void)
 }
 
 volatile struct irq_record irqrec;
+
+#if FW_IRQ
+/* interrupts taken, for the storm guard: read with interrupts enabled */
+static volatile uint16_t irq_ticks;
+#endif
 
 #if FW_ISR_BARE != 1 && FW_ISR_BARE != 5 && FW_ISR_BARE != 6 && \
 	FW_ISR_BARE != 7 && FW_ISR_BARE != 9
@@ -209,26 +205,9 @@ volatile struct irq_record irqrec;
 #else
 #define USB_ISR	__vector_11
 #endif
-void USB_ISR(void) __attribute__((signal, used, externally_visible));
-void USB_ISR(void)
+static inline __attribute__((always_inline)) void usb_isr(void)
 {
 	uint8_t n = irqrec.n;
-#if FW_IRQDIAG
-	uint8_t spot = irq_spot;
-
-	irq_spot = 0;
-	if (spot >= NUM_SPOTS)
-		spot = SPOT_OTHER;
-	irqdiag.total++;
-	irqdiag.taken[spot]++;
-	if (vec0_flag) {
-		vec0_flag = 0;
-		irqdiag.vec0[spot]++;
-		irqdiag.last_spot = spot;
-		irqdiag.last_1503 = vec0_regs[0];
-		irqdiag.last_1502 = vec0_regs[1];
-	}
-#endif
 
 	if (irq_census[11] != 0xffff)
 		irq_census[11]++;
@@ -267,6 +246,19 @@ void USB_ISR(void)
 	usb_check_events();
 #endif
 }
+
+void USB_ISR(void) __attribute__((signal, used, externally_visible));
+void USB_ISR(void)
+{
+#if FW_IRQ
+	irq_armed = 0;
+	irq_ticks++;
+#endif
+	usb_isr();
+#if FW_IRQ
+	irq_armed = 1;			/* RETI enables interrupts again */
+#endif
+}
 #endif
 
 /*
@@ -274,6 +266,27 @@ void USB_ISR(void)
  * interrupts off for good once it was taken more than 50 times between two
  * passes of the main loop.
  */
+#if FW_IRQ
+/*
+ * With interrupts enabled: it must not disable them, see usb_poll(), so it
+ * reads irq_ticks twice, until both reads agree.
+ */
+static void irq_storm_guard(void)
+{
+	static uint16_t last;
+	uint16_t now, again;
+
+	do {
+		now = irq_ticks;
+		again = irq_ticks;
+	} while (now != again);
+	if ((uint16_t)(now - last) > 50) {
+		irq_off();
+		irqrec.storm = 1;
+	}
+	last = now;
+}
+#else
 static void irq_storm_guard(void)
 {
 	static uint32_t last;
@@ -285,6 +298,7 @@ static void irq_storm_guard(void)
 		irqrec.storm = 1;
 	last = now;
 }
+#endif
 
 /* -- control endpoint ----------------------------------------------------- */
 
@@ -294,15 +308,18 @@ static uint8_t ctrl_aborted(void)
 	uint8_t r;
 
 	irq_off();
+#if FW_IRQ
+	/* the handler services the events, see usb_poll() */
+	if (irqrec.storm)
+		usb_check_events();
+	r = usb_events & (EV_SETUP | EV_RESET);
+	if (sreg & (1 << SREG_I))
+		irq_armed = 1;
+#else
 	usb_check_events();
 	r = usb_events & (EV_SETUP | EV_RESET);
-#if FW_IRQDIAG
-	irq_spot = SPOT_ABORTED;
 #endif
 	SREG = sreg;
-#if FW_IRQDIAG
-	irq_spot = 0;
-#endif
 
 	return r;
 }
@@ -336,11 +353,11 @@ static uint8_t ep0_tx(const uint8_t *p, uint8_t n)
 	/* the interrupt handler withdraws packets, don't race with it */
 	irq_off();
 	if (ctrl_aborted()) {
-		irq_on_at(SPOT_EP0_TX);
+		irq_on();
 		return 0;
 	}
 	EP0_TX_STAT |= EP_FULL;
-	irq_on_at(SPOT_EP0_TX);
+	irq_on();
 
 	return 1;
 }
@@ -708,29 +725,23 @@ void usb_poll(void)
 {
 	uint8_t ev;
 
-#if FW_IRQDIAG
-	if (irqdiag.knob & KNOB_MINIMAL) {
-		irq_off();
-		ev = usb_events;
-		usb_events = 0;
-		irq_spot = SPOT_POLL;
-		irq_enable_diag(irqdiag.knob);
-		irq_spot = 0;
-	} else {
-		static uint8_t pass;
-		uint8_t spot;
-
-		irq_storm_guard();
-		chk_new = 0;
-		if (!(irqdiag.knob & KNOB_SERVICE) || !(++pass & 63))
-			usb_check_events();
-		spot = chk_new ? SPOT_POLL_NEW : SPOT_POLL;
-		ev = usb_events;
-		usb_events = 0;
-		irq_spot = spot;
-		irq_enable_diag(irqdiag.knob);
-		irq_spot = 0;
-	}
+#if FW_IRQ
+	/*
+	 * docs/hardware.md "Interrupt faults": an interrupt requested while
+	 * interrupts are disabled for more than a few dozen cycles may enter
+	 * the reset vector when they are enabled again. So with interrupts
+	 * enabled, the handler of vector 11 services the events, as the
+	 * original firmware does in effect, and this takes what it recorded
+	 * with interrupts disabled for a few cycles only. Polled as with IRQ=0
+	 * only once the storm guard has switched interrupts off for good.
+	 */
+	irq_storm_guard();
+	irq_off();
+	if (irqrec.storm)
+		usb_check_events();
+	ev = usb_events;
+	usb_events = 0;
+	irq_on();
 #else
 	irq_storm_guard();
 	usb_check_events();
