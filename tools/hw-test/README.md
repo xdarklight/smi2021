@@ -11,9 +11,8 @@ and the audio ring buffer against synthetic input. These cover what those
 can not: real isochronous timing, the firmware upload, probe and teardown,
 and whether a frame that went in comes back out.
 
-> These scripts have not been run against hardware yet. The pattern
-> generator and `check-capture.py` are tested, including against captures
-> with faults injected into them; everything that talks to the board is not.
+All of them have run on an EasyCAP 002; what is still to run, and why, is
+in [`../../docs/testing.md`](../../docs/testing.md).
 
 ## Wiring
 

@@ -151,6 +151,10 @@ do:
 
 ## Testing on hardware
 
+[`tools/hw-test`](tools/hw-test/README.md) has the tests that run against a
+device, and [`docs/testing.md`](docs/testing.md) lists what is still to
+test. The sections below are cases that need a closer look than a test run.
+
 ### Audio with and without video
 
 The PCM device can be used with or without a video capture, and either of the
