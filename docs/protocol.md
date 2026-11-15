@@ -413,8 +413,22 @@ lines of 1440 bytes, framed by timing reference codes (0xff 0x00 0x00 and a
 word with the F, V and H bits), and the two fields of each frame one after
 the other. Lines and codes may be split across chunks. How many lines the
 decoder flags as active depends on its configuration; with the settings the
-driver uses, these are 288 lines per field for 625 line standards and 242
-for 525 line standards.
+driver uses, the V flag is that of ITU-R BT.656 (OFTS = 00 in decoder
+register 0x10), so for 625 line standards these are lines 23–310 and
+336–623, 288 per field, and for 525 line standards lines 20–263 and 283–525,
+244 and 243 (Tables 9 and 10 of the SAA7113H datasheet).
+
+The Windows driver instead has the decoder generate the V flag from VREF,
+and sets the length of VREF per standard (Windows driver): it writes 0x40 to
+decoder register 0x10 (OFTS = 01, VRLN = 0) for the 525 line standards and
+0x48 (OFTS = 01, VRLN = 1) for the 625 line ones. That flags exactly the
+lines it captures: 22–261 and 285–524 with 525 lines, 240 per field, and the
+same 288 lines per field as above with 625 lines. The tools of
+easycap-somagic-linux write 0x40 for either standard (reported), and so get
+286 lines per field with 625 lines. The driver keeps VRLN = 1, which the
+saa7115 driver sets for the saa7113 but not for the GM7113C, as the decoder
+disables the chrominance comb filter for NTSC and the phase error correction
+for PAL outside of VREF.
 
 **Audio data** is a stream of 32 bit little endian containers, each holding
 a 24 bit sample in its upper three bytes and 0x00 in its lowest byte,

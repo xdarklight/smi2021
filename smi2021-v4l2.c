@@ -583,17 +583,16 @@ static int smi2021_video_register(struct smi2021 *smi2021)
 }
 
 /*
- * The driver tells active video from blanking by the V flag of the timing
- * reference codes. Have the decoder generate it from VREF with the long VREF
- * range: according to Tables 6 and 7 of the SAA7113H datasheet this flags 288
- * lines per field as active for 625 line standards and 242 lines for 525 line
- * ones, of which the driver captures the first 240.
+ * The decoder runs the chrominance comb filter (NTSC) and the PAL delay line
+ * only on the lines inside its VREF window. Select the long one, which covers
+ * all captured lines with 625 lines and all but the first one of each field
+ * with 525 lines (Table 46 of the SAA7113H datasheet), as the vendor's Windows
+ * drivers do for 50 Hz. saa7113_init sets VRLN already but gm7113c_init does
+ * not. The V flag of the timing reference codes stays as in ITU-R BT.656.
  */
-static enum saa7113_r10_ofts smi2021_decoder_ofts = SAA7113_OFTS_VFLAG_BY_VREF;
 static bool smi2021_decoder_vrln = true;
 
 static struct saa7115_platform_data smi2021_decoder_pdata = {
-	.saa7113_r10_ofts = &smi2021_decoder_ofts,
 	.saa7113_r10_vrln = &smi2021_decoder_vrln,
 };
 

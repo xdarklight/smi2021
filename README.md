@@ -185,10 +185,10 @@ stuck process behind.
 ### PAL frames are accepted only at the full 288 lines per field
 
 With the decoder settings the driver uses, the decoder flags 288 active lines
-per field for 625 line standards and 242 for 525 line ones, see
+per field for 625 line standards and 244 or 243 for 525 line ones, see
 [`docs/protocol.md`](docs/protocol.md). The driver captures 288 lines per field
-for PAL and 240 of the 242 for NTSC, so NTSC tolerates a field that is up to
-two lines short while PAL tolerates none: `smi2021_field_done()` wants the full
+for PAL and 240 for NTSC, so NTSC tolerates a field that is a few lines short
+while PAL tolerates none: `smi2021_field_done()` wants the full
 `720 * 2 * 288` bytes before it accepts a field, and a field that falls short
 makes the frame come back with `V4L2_BUF_FLAG_ERROR`, or be dropped outright if
 it was the first field of the frame.
@@ -277,8 +277,8 @@ blanking alone, as it could only guess which field is which.
 `tools/parser-test/` builds a userspace harness that feeds synthetic
 ITU-R BT.656 streams through the driver's frame parser and buffer handling,
 extracted verbatim from `smi2021-v4l2.c`, and checks the resulting frames
-byte for byte, including the 242 active lines per field that the decoder
-sends for NTSC:
+byte for byte, including the 244 and 243 active lines per field that the
+decoder sends for NTSC:
 
 ```bash
 make -C tools/parser-test check

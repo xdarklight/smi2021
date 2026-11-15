@@ -319,14 +319,14 @@ static int run_sequence(void)
 	nsequences = 0;
 
 	stream_len = 0;
-	emit_field(0, 1, 121, 242, false);
-	emit_field(1, 0, 0, 242, false);
-	emit_field(1, 1, 0, 242, false);
-	emit_field(2, 0, 0, 242, false);
-	emit_field(2, 1, 0, 242, false);
+	emit_field(0, 1, 122, 244, false);
+	emit_field(1, 0, 0, 244, false);
+	emit_field(1, 1, 0, 244, false);
+	emit_field(2, 0, 0, 244, false);
+	emit_field(2, 1, 0, 244, false);
 	first = stream_len;
-	emit_field(3, 0, 0, 242, false);
-	emit_field(3, 1, 0, 242, false);
+	emit_field(3, 0, 0, 244, false);
+	emit_field(3, 1, 0, 244, false);
 	emit_field(4, 0, 0, 2, false);
 
 	smi2021_parse_video(&s, stream, first);
@@ -350,11 +350,12 @@ int main(void)
 {
 	static const struct test tests[] = {
 		{ "NTSC, 240 active lines",	  480, 240, 240, false, false, 1, 1, 0 },
-		{ "NTSC, 242 active lines (VRLN)", 480, 242, 242, false, false, 1, 1, 0 },
+		{ "NTSC, 244 active lines (field 1)", 480, 244, 244, false, false, 1, 1, 0 },
+		{ "NTSC, 243 active lines (field 2)", 480, 243, 243, false, false, 1, 1, 0 },
 		{ "PAL, 288 active lines",	  576, 288, 288, false, false, 1, 1, 0 },
-		{ "start in the middle of field 1", 480, 242, 242, true, false, 1, 1, 0 },
-		{ "0xff in video data",		  480, 242, 242, false, true, 1, 1, 0 },
-		{ "short first field is dropped",  480, 242, 200, false, false, 2, 1, 1 },
+		{ "start in the middle of field 1", 480, 244, 244, true, false, 1, 1, 0 },
+		{ "0xff in video data",		  480, 244, 244, false, true, 1, 1, 0 },
+		{ "short first field is dropped",  480, 244, 200, false, false, 2, 1, 1 },
 	};
 	/* 1020 is the payload size of a real chunk; tiny ones split codes */
 	static const unsigned int chunks[] = { 1020, 1, 3, 7, 1u << 30 };
