@@ -141,40 +141,49 @@ static uint8_t probe_window(void)
 static void probe_timed(void);
 
 /*
- * probe_in 3: trace 0x1502, 0x151c and 0x1503 after ep0_tx() queued a
- * packet: every change in 2000 polls, up to TRACE_E per packet, for the
- * first TRACE_N packets. A poll takes some 14 cycles.
+ * probe_in 3: trace 0x1502, 0x151c, 0x1518 and 0x1503 after ep0_tx()
+ * queued a packet; 4: after a setup packet arrived, in the main loop,
+ * before the firmware handles it, with bmRequestType and bRequest. Every
+ * change in TRACE_P polls, up to TRACE_E per trace, for the first TRACE_N
+ * traces. A poll takes some 25 cycles.
  */
 #define TRACE_N	12
-#define TRACE_E	8
+#define TRACE_E	12
+#define TRACE_P	3000
 struct probe_trace {
 	uint16_t poll;
-	uint8_t r1502, r151c, r1503;
+	uint8_t r1502, r151c, r1518, r1503;
 };
 struct probe_trace probe_traces[TRACE_N][TRACE_E];
+uint8_t probe_trace_req[TRACE_N][2];
 uint8_t probe_trace_n;
 
-static void probe_trace_packet(void)
+static void probe_trace(void)
 {
 	struct probe_trace *t;
-	uint8_t b, c, a, pb = 0xff, pc = 0xff, pa = 0xff, e = 0;
+	uint8_t b, c, f, a, pb = 0xff, pc = 0xff, pf = 0xff, pa = 0xff, e = 0;
 	uint16_t n;
 
 	if (probe_trace_n >= TRACE_N)
 		return;
+	probe_trace_req[probe_trace_n][0] = REG8(0x2000);
+	probe_trace_req[probe_trace_n][1] = REG8(0x2001);
 	t = probe_traces[probe_trace_n++];
-	for (n = 0; n < 2000 && e < TRACE_E; n++) {
+	for (n = 0; n < TRACE_P && e < TRACE_E; n++) {
 		b = USB_STATUS;
 		c = EP0_TX_STAT;
+		f = EP0_RX_STAT;
 		a = USB_EVENT;
-		if (b != pb || c != pc || a != pa) {
+		if (b != pb || c != pc || f != pf || a != pa) {
 			t[e].poll = n;
 			t[e].r1502 = b;
 			t[e].r151c = c;
+			t[e].r1518 = f;
 			t[e].r1503 = a;
 			e++;
 			pb = b;
 			pc = c;
+			pf = f;
 			pa = a;
 		}
 	}
@@ -246,7 +255,7 @@ static void probe(void)
 		return;
 	if ((*reg ^ inv) & mask)
 		return;			/* there already: when is unknown */
-	r = probe_pending();
+	r = probe_in == 4 ? 0 : probe_pending();
 	if (r) {
 		probe_pre++;
 		if (r == 2)
@@ -258,7 +267,10 @@ static void probe(void)
 			goto hit;
 	return;
 hit:
-	probe_timed();
+	if (probe_in == 4)
+		probe_trace();
+	else
+		probe_timed();
 }
 
 static void probe_timed(void)
@@ -298,6 +310,6 @@ rep('usb.c', """	EP0_TX_STAT |= EP_FULL;
 	else if (probe_in == 2)
 		probe_in_sweep();
 	else if (probe_in == 3)
-		probe_trace_packet();
+		probe_trace();
 	irq_on();
 """)

@@ -19,7 +19,10 @@ counts back, all through register access requests:
 - `probe_in` 1: right after `ep0_tx()` queued a packet, see whether a
   request is pending; 2: open the window at a varying time after that,
   and count by its distance from the moment the host took the packet;
-  3: trace 0x1502, 0x151c and 0x1503 after the packet was queued;
+  3: trace 0x1502, 0x151c, 0x1518 and 0x1503 after the packet was
+  queued; 4 (with `probe_mask` 0x10 on 0x1502): trace them after a setup
+  packet arrived, before the firmware handles it, with the request's
+  first two bytes;
 - before each window that waits for an event, a first window tells
   whether a request is pending already; those are counted by the values
   of 0x1503, 0x1502, 0x151c and 0x1518 read just before, or, with
@@ -39,6 +42,9 @@ upload`. Then, with the driver unloaded:
     rmmod smi2021
     PYTHONPATH=tools/bridge-probe tools/irqprobe/irqprobe.py \
         /tmp/irqprobe-fw/build/opensmi21.elf 10000
+
+An optional fourth argument picks runs by the keys of `RUNS` in the
+script, for example `2 setup-trace,in-trace`.
 
 Each run of the script takes a few minutes. Put the normal firmware back
 afterwards; the probe build works with the driver, as it polls, but delays

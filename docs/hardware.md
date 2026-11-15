@@ -532,7 +532,7 @@ streaming engines; the firmware never touches it.
 |---------|-----|
 | 0x1500 | bit 3: disconnect from the bus while set (inferred); bit 2: set on suspend |
 | 0x1501 | bit 1: set when the device runs at high speed |
-| 0x1502 | bit 4: a setup packet was received; the firmware clears it in the event handler |
+| 0x1502 | bit 4: a setup packet was received; the firmware clears it in the event handler; bits 3, 2 and 0: see below |
 | 0x1503 | event code, see [Interrupt](#interrupt) |
 | 0x1504 | device address |
 | 0x1507 | written 0xc4 at start (meaning unknown; maybe the enable mask of the interrupt) |
@@ -550,6 +550,25 @@ the next one (inferred); a setup packet is told apart from a stale code by
 0x1502 bit 4, which the handler clears. Read twice in a row on a setup
 packet, by a test firmware, 0x1503 and 0x1502 each gave the same value
 both times (observed, on an EasyCAP 002).
+
+Bits 3, 2 and 0 of 0x1502 follow the host's tokens on the control
+endpoint (observed, EasyCAP 002, 2026-11-15, `tools/irqprobe`, polled
+every 0.8 µs or so). With the firmware holding back its answer to a setup
+packet, 0x1502 read 0x19 (bit 3 set) while the host waited for the data of
+an IN request, and 0x14 (bits 3 and 0 clear) while it waited to send the
+data of an OUT request; once per microframe, 125 µs, for under 1 µs, it
+read 0x15 instead, bit 3 clear and bit 2 set in the first case, bit 0
+set in the second. When the firmware queued the data of an IN request,
+0x1502 read 0x09 and changed to 0x05 about 10 µs later; when it queued the
+packet of zero bytes that ends an OUT request, it read 0x01 and changed
+to 0x05 some 65 µs later. 0x151c bit 7 already read 0 at the first poll
+after queueing in all 24 traced packets, while read just before the
+windows of the probe at the same place it read 1 nearly every time; why
+is not known. So, presumably, bit 3 is set while the
+host's IN tokens find no packet and are refused, bit 2 when an IN packet
+went out or a token is being handled, and bit 0 has the same part for
+the host's OUT tokens (inferred). Every interrupt that entered the reset
+vector came with bit 3 set, see [Interrupt faults](#interrupt-faults).
 
 ### Interrupt
 

@@ -2,34 +2,37 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Host side of the IRQPROBE build: see README.md.
 
-usage: irqprobe.py ELF REQUESTS [STEP]
+usage: irqprobe.py ELF REQUESTS [STEP [RUN,...]]
 
 ELF is the probe build's build/opensmi21.elf, for the addresses of its
 tables (needs avr-nm); REQUESTS the register reads per run, which make the
-USB events; STEP the delay step, in units of 4 cycles. Needs
+USB events; STEP the delay step, in units of 4 cycles; RUN one of the keys
+of RUNS below, all by default. Needs
 tools/bridge-probe on PYTHONPATH and the driver unloaded.
 """
 import struct, subprocess, sys
 import bridge as br
 
-# name, probe_addr, probe_mask, probe_inv, probe_in, probe_noread
-RUNS = [
-    ('pending after ep0_tx() queued a packet, registers read before', 0x1502, 0, 0, 1, 0),
-    ('pending after ep0_tx() queued a packet, no reads', 0x1502, 0, 0, 1, 1),
-    ('main loop, setup packet, registers read before', 0x1502, 0x10, 0, 0, 0),
-    ('main loop, setup packet, no reads', 0x1502, 0x10, 0, 0, 1),
-    ('trace after ep0_tx() queued a packet', 0x1502, 0, 0, 3, 0),
-    ('sweep: window against the moment the host took the packet', 0x1502, 0, 0, 2, 0),
-]
+# key: name, probe_addr, probe_mask, probe_inv, probe_in, probe_noread
+RUNS = {
+    'in-pending': ('pending after ep0_tx() queued a packet, registers read before', 0x1502, 0, 0, 1, 0),
+    'in-pending-noread': ('pending after ep0_tx() queued a packet, no reads', 0x1502, 0, 0, 1, 1),
+    'setup': ('main loop, setup packet, registers read before', 0x1502, 0x10, 0, 0, 0),
+    'setup-noread': ('main loop, setup packet, no reads', 0x1502, 0x10, 0, 0, 1),
+    'in-trace': ('trace after ep0_tx() queued a packet', 0x1502, 0, 0, 3, 0),
+    'setup-trace': ('trace after a setup packet, before the firmware handles it', 0x1502, 0x10, 0, 4, 0),
+    'in-sweep': ('sweep: window against the moment the host took the packet', 0x1502, 0, 0, 2, 0),
+}
 elf, reqs = sys.argv[1], int(sys.argv[2])
 step = int(sys.argv[3]) if len(sys.argv) > 3 else 2
+keys = sys.argv[4].split(',') if len(sys.argv) > 4 else list(RUNS)
 sym = {}
 out = subprocess.run(['avr-nm', elf], capture_output=True, text=True).stdout
 for line in out.split('\n'):
     p = line.split()
     if len(p) == 3:
         sym[p[2]] = int(p[0], 16) & 0xffff
-N, SNAP_N, TRACE_N, TRACE_E = 128, 24, 12, 8
+N, SNAP_N, TRACE_N, TRACE_E = 128, 24, 12, 12
 TABS = ('probe_tries', 'probe_v11', 'probe_v0')
 b = br.Bridge(br.Usb1Transport())
 b.write8(sym['probe_step'], step)
@@ -39,7 +42,8 @@ def u16(name):
     return struct.unpack('<H', b.read(sym[name], 2))[0]
 
 
-for name, addr, mask, inv, pin, noread in RUNS:
+for key in keys:
+    name, addr, mask, inv, pin, noread = RUNS[key]
     b.write8(sym['probe_mask'], 0)
     b.write8(sym['probe_in'], 0)
     for t in TABS:
@@ -54,22 +58,30 @@ for name, addr, mask, inv, pin, noread in RUNS:
     b.write8(sym['probe_noread'], noread)
     b.write8(sym['probe_mask'], mask)
     b.write8(sym['probe_in'], pin)
-    for i in range(reqs if pin != 3 else 20):
+    for i in range(reqs if pin not in (3, 4) else 10):
         b.read8(sym['probe_step'])
     b.write8(sym['probe_mask'], 0)
     b.write8(sym['probe_in'], 0)
     print(f'== {name}')
-    if pin == 3:
+    if pin in (3, 4):
         n = b.read8(sym['probe_trace_n'])
-        raw = b.read(sym['probe_traces'], TRACE_N * TRACE_E * 5)
+        raw = b.read(sym['probe_traces'], TRACE_N * TRACE_E * 6)
+        req = b.read(sym['probe_trace_req'], TRACE_N * 2)
         for k in range(n):
             ev = []
             for e in range(TRACE_E):
-                poll, r2, rc, r3 = struct.unpack_from('<HBBB', raw, (k * TRACE_E + e) * 5)
+                poll, r2, rc, r8, r3 = struct.unpack_from('<HBBBB', raw, (k * TRACE_E + e) * 6)
                 if e and poll == 0:
                     break
-                ev.append(f'{poll:4d}: 1502={r2:02x} 151c={rc:02x} 1503={r3:02x}')
-            print('   packet', k, ' | '.join(ev))
+                ev.append(f'{poll:4d}: 1502={r2:02x} 151c={rc:02x} 1518={r8:02x} 1503={r3:02x}')
+            head = ''
+            if pin == 4:
+                rt = req[2 * k]
+                head = (f'{"IN " if rt & 0x80 else "OUT"} bmRequestType {rt:02x} '
+                        f'bRequest {req[2 * k + 1]:02x}: ')
+            print(f'   {k:2d} {head}')
+            for x in ev:
+                print('        ' + x)
         continue
     tab = {t: struct.unpack(f'<{N}H', b.read(sym[t], 2 * N)) for t in TABS}
     tr, a, z = (sum(tab[t]) for t in TABS)
