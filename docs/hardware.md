@@ -727,22 +727,33 @@ second engine reads 0xc8 with `smi2021_3f.bin` as well (observed).
 
 To run a transfer, the firmware
 
-1. if the status shows bit 4, waits until bit 6 or 7 is set and writes 0 to
+1. for a write, puts the data bytes into the buffer,
+2. if the status shows bit 4, waits until bit 6 or 7 is set and writes 0 to
    the status,
-2. for a write, puts the data bytes into the buffer,
 3. writes the slave address, the subaddress, the number of bytes and,
    last, the command,
 4. waits while bit 4 is set and neither bit 6 nor bit 7 is,
-5. checks bit 5 for a failure and writes 0 to the status,
+5. reads the status again, checks bit 5 for a failure and writes 0 to the
+   status,
 6. for a read, takes the data bytes from the buffer.
 
-It retries a failed transfer up to 16 times by repeating steps 1 and 3 to
-5, without writing the buffer again. So the buffer is memory that keeps
-its contents, not a FIFO (inferred). Step 4 stops right away unless bit 4
-is set, so the engine must show bit 4 as soon as the command is written
-(inferred). The buffer holds 32 bytes: the next byte is the register at
-+0x25 (observed). The host can ask for transfers of up to 255 bytes, and
-replies hold up to 32 bytes of data.
+It makes 16 tries at most, the first and up to 15 more, by repeating
+steps 2 to 5, without writing the buffer again; both images do the same.
+So the buffer is memory that keeps its contents, not a FIFO (inferred).
+Step 4 stops right away unless bit 4 is set, so the engine must show bit 4
+as soon as the command is written (inferred). The buffer holds 32 bytes:
+the next byte is the register at +0x25 (observed). The host can ask for
+transfers of up to 255 bytes, and replies hold up to 32 bytes of data.
+
+Some timings of the original, counted in CPU cycles of its code, at
+30 MHz: the first read of the status in step 4 comes some 3 cycles after
+the command is written, a poll takes some 12 cycles, step 5 reads the status
+some 4 cycles after the last poll, and the next try writes its command
+some 100 cycles, 3.3 µs, after the status of a failed one was cleared. It
+waits in steps 2 and 4 without a time limit. For an i2c write, it does
+not update the reply: a failure of all tries is reported only for reads,
+and after a write, the reply is that of the last read (see [Register
+access requests](protocol.md#register-access-requests)).
 
 A command with bit 7 clear, 0x20 or 0x60 with a subaddress, froze the
 first engine until the device lost power (observed): none of its

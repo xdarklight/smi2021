@@ -292,6 +292,10 @@ request with `wValue` equal to the head. The reply has the same layout as
 the request: the head, the i2c address, the command, the flags, the size,
 the address bytes and the data that was read.
 
+For an i2c write, both images leave the reply as it was: an IN request
+returns the reply of the last read, so a failed i2c write is not reported
+and a host cannot check for one this way.
+
 ### Bridge registers
 
 With flag bit 7 set, the two address bytes are a 16 bit address in the

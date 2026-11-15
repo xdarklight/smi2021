@@ -35,14 +35,30 @@ of 100 switches from NTSC to PAL straight after a switch to NTSC.
 
 Still to do:
 
+- Find which difference of OpenSMI21's i2c transfers from the original
+  ([I2C engines](hardware.md#i2c-engines)) loses the writes, and makes
+  reads fail more often (53 tries in 1000 against none in 947). The order
+  of the steps is the same; OpenSMI21 differs in that it
+  - starts the next try some 24 cycles (0.8 µs) after it cleared the
+    status of a failed one, where the original takes some 100 (3.3 µs);
+    at 100 kHz, the bus should be free for 4.7 µs between a stop and the
+    next start, which the engine may or may not see to itself;
+  - checks bit 5 in the value of its last poll instead of reading the
+    status again;
+  - polls the status every 9 cycles or so instead of 12;
+  - makes 17 tries instead of 16, and gives up waiting after 50000 polls;
+  - reports a failed write in the reply, which the original doesn't.
+
+  The first is the likeliest cause of a write whose every try fails. The
+  second could let a try pass before the engine sets bit 5, which the
+  clearing of the status may then not catch, so that the next transfer
+  starts with a failure; that would fit the more frequent failed first
+  tries. Each variant needs a replug to upload, then the write test of
+  2026-11-15.
 - Read the reply after each write in the driver, and retry a failed one,
-  as reads do; then repeat the switches and the write test, which writes
-  four registers of the decoder back to back and reads them back.
-- Find what OpenSMI21's i2c transfers do differently from the original,
-  which also has reads fail far less often (no try in 947 against 53 in
-  1000). Its `i2c_xfer()` fills the data buffer before it checks whether
-  the engine is busy, where [I2C engines](hardware.md#i2c-engines) has
-  the check first; whether that or anything else matters is not known.
+  as reads do. With the vendor's images that reports nothing (see
+  [Register access requests](protocol.md#register-access-requests)), so
+  reading the register back is the check that works with both.
 
 ## With somebody at the board
 
