@@ -25,7 +25,8 @@ only worth repeating before it becomes one.
 
 The driver doesn't look at the reply to an i2c write, so a write that the
 firmware reports as failed goes unnoticed. With OpenSMI21, about one write
-in a hundred fails that way, see [I2C engines](protocol.md#i2c-engines).
+in a hundred fails that way; with `smi2021_3c.bin`, none of 9600 did, see
+[I2C engines](protocol.md#i2c-engines).
 When it is the write of the decoder's register 0x08 in a switch to PAL,
 the decoder stays at 60 Hz: the input reports no signal, every buffer
 comes back with `V4L2_BUF_FLAG_ERROR`, and as S_STD to the standard that
@@ -37,10 +38,11 @@ Still to do:
 - Read the reply after each write in the driver, and retry a failed one,
   as reads do; then repeat the switches and the write test, which writes
   four registers of the decoder back to back and reads them back.
-- The same test with `smi2021_3c.bin`, which needs a replug: whether the
-  vendor firmware loses writes as well, or only OpenSMI21, which also has
-  reads fail far more often (53 tries in 1000 against none in 947).
-- If it is OpenSMI21's, find what its i2c transfers do differently.
+- Find what OpenSMI21's i2c transfers do differently from the original,
+  which also has reads fail far less often (no try in 947 against 53 in
+  1000). Its `i2c_xfer()` fills the data buffer before it checks whether
+  the engine is busy, where [I2C engines](hardware.md#i2c-engines) has
+  the check first; whether that or anything else matters is not known.
 
 ## With somebody at the board
 

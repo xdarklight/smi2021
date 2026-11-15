@@ -429,8 +429,10 @@ its value. Most were writes of 0x08, 0x16 and 0x17; it happened with
 way, the driver's switch of the standard lost a write of the decoder in
 36 of 100 switches from NTSC to PAL that followed a switch to NTSC right
 away. The 6000 writes above, each read back before the next one, all
-arrived. Whether `smi2021_3c.bin` loses writes in the same way was not
-tested.
+arrived. With `smi2021_3c.bin` on the same day, cable and port, none of
+the writes was lost: none of 1600 writes each with 0, 0.5, 2 and 10 ms
+between them and of 8000 more with none, and none of 100 switches of the
+standard as above (observed). So the lost writes are OpenSMI21's.
 
 The 0xff as the second byte and the lost 0x84 depend on the load on SDA
 (observed): with a lead of the logic analyzer on SDA both disappear (none
