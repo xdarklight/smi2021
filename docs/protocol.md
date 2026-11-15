@@ -107,7 +107,8 @@ used by the driver, consists of vendor requests (`bmRequestType` 0x40 or
 
 The Windows driver takes any second byte other than 0x07 in the state as a
 running firmware; a firmware replies to the same request with the mode, see
-[IN requests](#in-requests), which is never 0x07 (Windows driver).
+[IN requests](#in-requests), which is never 0x07 (Windows driver) unless
+the host selected a mode other than 2 to 5, see [Modes](#modes).
 
 The image of `smi2021_3f.bin` is 6620 bytes long, MD5
 `17caca24fdd5833b091b1550c371528b`; the file in this repository has 14
@@ -231,6 +232,19 @@ while it does not stream, which is harmless as it selects alternate setting
 
 Changing the mode does not stop the engines of the previous one, except for
 the engines that the new mode resets.
+
+The firmware accepts and stores any other mode as well, without a stall,
+but configures nothing for it: the endpoint blocks, the engines and 0x1880
+stay as they were, and only +8 and +12 of block B are cleared, as for every
+mode. `SET_INTERFACE` to a non-zero alternate setting then starts no
+engine, and only sets bit 7 of 0x1600. The reply to the state request
+(`wValue` 0x01, see [IN requests](#in-requests)) only holds the mode for
+modes 2 to 5. For any other mode its second byte is left as the last
+request put it there: the second data byte of the last OUT request, or the
+second byte of the last reply. Right after the mode request that is the
+mode itself, but after a register access it can be any value, including
+0x07, which hosts take for the [bootloader](#bootloader). So a host should
+only select modes 2 to 5.
 
 The Windows driver uses mode 5 with alternate setting 2 for video, and
 mode 2 with alternate setting 1 for audio only (Windows driver). It starts
