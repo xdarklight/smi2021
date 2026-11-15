@@ -282,9 +282,10 @@ interrupt and return address records, interrupt window), their host
 script `test-requests.py`, and the test builds (`ISR_BARE`, `ISR_EVENTS`,
 `PUSH_GUARD=0`, the interrupt window) with which this firmware ran
 experiments 8 to 12 of `docs/hardware.md` were removed once those were
-done. The last commit that has them is ff87b6c, "media: smi2021: upload
+done. The last commit that has them is "media: smi2021: upload
 OpenSMI21 instead of a vendor firmware"; the diagnostic build for the
-interrupts that entered the reset vector is in dba778e. To look at the
+interrupts that entered the reset vector is in commit "fw: diagnostic
+build for interrupts that enter the reset vector". To look at the
 device now, the register access requests reach its whole data space, see
 [`tools/bridge-probe`](../tools/bridge-probe/README.md).
 
@@ -311,7 +312,8 @@ device now, the register access requests reach its whole data space, see
 This firmware was written from these sources only:
 
 - `docs/protocol.md`, `docs/hardware.md` and `README.md` of this
-  repository, the documents as of commit 4c6a688 and the revision of both
+  repository, the documents as of commit "tools: add a probe for the
+  bridge's hardware" and the revision of both
   that appeared, uncommitted, in the working tree during the work;
 - the host driver: `smi2021-main.c`, `smi2021-bootloader.c` and
   `smi2021.h`;

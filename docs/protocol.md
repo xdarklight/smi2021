@@ -407,8 +407,8 @@ the same EasyCAP 002 (observed):
 | | 2026-11-13 | 2026-11-15 |
 |---|---|---|
 | 0xe0 reads of one byte reported as failed | about one in five | none of about 30000, with both firmwares, idle and while streaming |
-| 0x84 + 0xa0 reading the wrong register | about a quarter | 2.4 to 6.2 %; 4.6 % with OpenSMI21 since 0d9db23 |
-| second byte of an 0xe0 read of two bytes is 0xff | about one in five | 3 to 7 % with `smi2021_3c.bin`, 25 % with OpenSMI21 (one measurement), 3.0 % with OpenSMI21 since 0d9db23 |
+| 0x84 + 0xa0 reading the wrong register | about a quarter | 2.4 to 6.2 %; 4.6 % with OpenSMI21 since commit "fw: clear the i2c status no sooner than the original" |
+| second byte of an 0xe0 read of two bytes is 0xff | about one in five | 3 to 7 % with `smi2021_3c.bin`, 25 % with OpenSMI21 (one measurement), 3.0 % with OpenSMI21 since commit "fw: clear the i2c status no sooner than the original" |
 | 0xc0 writes lost | none seen | none of 6000, each read back |
 
 The known differences between the two days are the USB cable, a very
@@ -423,7 +423,9 @@ succeeded each time; with `smi2021_3c.bin` no try failed in 947 reads
 (observed, one capture each).
 
 Writes with 0xc0 do fail in all tries with OpenSMI21 (observed, EasyCAP
-002, 2026-11-15, the driver of 1349e8e, a root port). Writing 0x15,
+002, 2026-11-15, the driver as of commit
+"media: smi2021: say that the failed i2c reads depend on the setup", a root port).
+Writing 0x15,
 0x16, 0x17 and 0x08 of the decoder in turn, the values of one standard
 and then of the other, without reading between the writes, 0.25 to 2.5 %
 of the writes were reported as failed in bit 0 of the command in the

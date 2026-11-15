@@ -9,8 +9,9 @@ for yet are in [Open questions](protocol.md#open-questions).
 
 ## Regression on the current tree
 
-Done on 2026-11-15 with the driver of 1349e8e and the default build of
-OpenSMI21 (`IRQ=0`), uploaded by the driver: in PAL and in NTSC,
+Done on 2026-11-15 with the driver as of commit
+"media: smi2021: say that the failed i2c reads depend on the setup" and the default build
+of OpenSMI21 (`IRQ=0`), uploaded by the driver: in PAL and in NTSC,
 `run-tests.sh` steps 1 to 10, `v4l2-compliance -s` (132 of 132, no
 warnings), all of `stress.sh` with 20 rounds and `dmabuf-test.py`;
 `stall-test.py` and `out-test.py` once. See [Long runs](#long-runs) for
@@ -40,7 +41,8 @@ Still to do:
   16000 writes and no register in 100 switches, see [I2C
   engines](hardware.md#i2c-engines); with the variant that waits 1 µs,
   `run-tests.sh` steps 4 to 10 passed in PAL. OpenSMI21 now does the
-  same (0d9db23), in an image identical to that variant; with it,
+  same (commit "fw: clear the i2c status no sooner than the original"),
+  in an image identical to that variant; with it,
   `v4l2-compliance -s` passed in PAL with 132 of 132, and 20 rounds of
   rebinding passed. Of 2000 raw reads each, with the driver unloaded,
   the second byte of an 0xe0 read of two bytes was 0xff in 3.0 %, where
