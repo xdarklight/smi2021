@@ -704,14 +704,25 @@ The two engines are at 0x1780 and 0x3180 and are identical:
 | +4 | slave address, 8 bit |
 | +5–+0x24 | data buffer, 32 bytes |
 | +0x25 | bits 7–6 fixed, presumably straps, 11 on an EasyCAP 002; bits 5–0 keep a written value; see [Board identification](protocol.md#board-identification) |
-| +0x26–+0x29 | registers of unknown use; +0x26 and +0x28 keep a written value |
+| +0x26–+0x29 | registers of unknown use; +0x26 and +0x28 keep a written value; none of them sets the clock of the bus |
 
 The block repeats every 0x40 bytes: 0x17c0 reads as 0x1780 (observed).
 Each engine has its own +0x25 to +0x29: a write at 0x17a6 doesn't show at
 0x31a6 (observed). After power-up, both engines read the same there with
 `smi2021_3c.bin`: c8 32 d0 dd 06 at one time, c8 32 06 dd d0 at another,
 in reads that both started at +0x25 (observed). So +0x27 and +0x29 trade
-places, between power cycles or between reads; why is unknown. +0x25 of the
+places, between power cycles or between reads; why is unknown. A write
+to 0x17a7 showed at +0x29 in the next read of the five, and a write to
+0x17a9 at +0x27 (observed).
+
+None of the four sets the clock of the bus (observed, with a logic
+analyzer on SCL of an EasyCAP 002, `smi2021_3c.bin`): with 0x34 and 0x40
+in +0x26, with 0xde, 0xff and 0x6e in +0x28, and with the writes to +0x27
+and +0x29 above, SCL stayed low for 5.1 µs and high for 4.2 µs, and the
+rates of failed transfers did not change. With 0x64 in +0x26 the next i2c
+request was not answered, nor any request after it, until the device lost
+power; whether SCL changed was not seen. So the guess that +0x26 = 50
+divides 30 MHz down to 100 kHz does not hold for small changes. +0x25 of the
 second engine reads 0xc8 with `smi2021_3f.bin` as well (observed).
 
 To run a transfer, the firmware

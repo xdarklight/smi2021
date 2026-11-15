@@ -377,24 +377,62 @@ The Windows driver reads a register of the decoder by writing the register
 number with 0x84, then reading one byte with 0xa0, with 0x00 instead of the
 register number (reported), and waits 10 ms between the two (Windows
 driver), which suggests that 0xa0 does not use the
-subaddress. On an EasyCAP 002 with `smi2021_3c.bin`, about a quarter of
-these reads return the register that an earlier transfer left the
-decoder's subaddress at, without any failure in the reply (observed). So
-the setting of the subaddress with 0x84 is lost that often, and as a
-write, without a trace.
+subaddress. On an EasyCAP 002, some of these reads return the register
+that an earlier transfer left the decoder's subaddress at, without any
+failure in the reply (observed): about 4 % with `smi2021_3c.bin` and with
+OpenSMI21 on 2026-11-15, about a quarter on 2026-11-13. So the setting of
+the subaddress with 0x84 is lost that often, and as a write, without a
+trace. Why is not known.
 
 0xe0 with one address byte, the subaddress, does the combined write and
 read of the SAA7113H datasheet in one transfer; the reply has the
-subaddress as its address byte, followed by the data. About one in five of
-these reads fails despite the firmware's retries, independently of the
-ones before and regardless of pauses between the requests, and is reported
-in bit 0 of the command in the reply. A read that does not report a
-failure has always returned the right value, for reads of one byte. In
-reads of two bytes, the second one is 0xff, without a failure, in about one
-in five (observed): a host that reads more than one byte can't trust the
-bytes after the first. Writes with 0xc0 have not been seen to fail
-(observed). The driver reads with 0xe0 and tries again
-when a read fails.
+subaddress as its address byte, followed by the data. On the wire it is
+(observed, with a logic analyzer): start, 0x4a, the subaddress, a
+repeated start, 0x4b, the data bytes, of which the bridge acknowledges
+all but the last, and stop. The clock is about 107 kHz, low for 5.1 µs
+and high for 4.2 µs. A failure of all tries is reported in bit 0 of the
+command in the reply. A read that does not report a failure has always
+returned the right value, for reads of one byte.
+
+How often a transfer fails changed between two days of measurements on
+the same EasyCAP 002 (observed):
+
+| | 2026-11-13 | 2026-11-15 |
+|---|---|---|
+| 0xe0 reads of one byte reported as failed | about one in five | none of about 30000, with both firmwares, idle and while streaming |
+| 0x84 + 0xa0 reading the wrong register | about a quarter | 2.4 to 6.2 % |
+| second byte of an 0xe0 read of two bytes is 0xff | about one in five | 3 to 7 % with `smi2021_3c.bin`, 25 % with OpenSMI21 (one measurement) |
+| 0xc0 writes lost | none seen | none of 6000, each read back |
+
+The known differences between the two days are the USB cable, a very
+cheap one on 2026-11-13 and a better one on 2026-11-15, and the port, a
+port of a hub on 2026-11-13 and a root port on 2026-11-15; whether they
+matter was not tested. So the one in five of 2026-11-13 is unexplained
+and was not reproduced.
+
+With OpenSMI21, 53 tries in 1000 reads of 0xe0 were not acknowledged by
+the decoder, at the write address or at the subaddress, and the retry
+succeeded each time; with `smi2021_3c.bin` no try failed in 947 reads
+(observed, one capture each).
+
+The 0xff as the second byte and the lost 0x84 depend on the load on SDA
+(observed): with a lead of the logic analyzer on SDA both disappear (none
+in 2000 and 1400), with a lead on SCL alone they stay, and they return
+when the lead on SDA is taken off. The pull-ups are 2.2 kΩ on both lines,
+to a supply of 3.6 V. None of the engine's registers +0x26 to +0x29
+changes the clock, see [I2C engines](hardware.md#i2c-engines).
+
+For the 0xff there is a likely cause (inferred): after the first byte of
+a read the bridge releases its acknowledge within 84 ns of the falling
+edge of SCL, in 81 of 500 reads within the same sample of 83 ns, where
+the decoder takes 500 to 670 ns for its own (observed, with the lead on
+SDA, which delays the edge). Without the lead SDA presumably rises while
+the decoder still sees SCL high, which is a stop condition: the decoder
+lets go of the bus and the bridge reads 0xff. A host that reads more than
+one byte can't trust the bytes after the first.
+
+The driver reads one byte with 0xe0 and tries again when a read fails,
+and writes with 0xc0.
 
 The firmware completes a transfer, including its retries, before it
 acknowledges the request, so the host needs no delays between requests.
@@ -632,6 +670,14 @@ hardware for these and for the questions about the inside of the bridge.
 - What the GPIO lines `PC0` and `PC4` are connected to; `PA7` is the reset
   of the decoder and the audio ADC.
 - The bootloader's behaviour beyond the requests listed above.
+- Why one in five reads of 0xe0 failed on 2026-11-13 and none on
+  2026-11-15, why writes with 0x84 are lost, and whether the 0xff second
+  byte comes from the bridge releasing its acknowledge too early; see [I2C
+  engines](#i2c-engines). The last two take a scope, as a logic analyzer
+  on SDA makes them go away.
+- Why OpenSMI21 showed more failed tries and more 0xff second bytes than
+  `smi2021_3c.bin`, which run the same sequence on the engine; one
+  measurement each.
 
 ## Sources
 

@@ -59,6 +59,9 @@ of finding out, and on the real device it is worse than that:
   the device was unplugged: its registers no longer took writes, and every
   transfer "succeeded" with stale data, so a scan found a device at every
   address.
+- 0x64 written to 0x17a6 (+0x26 of the first engine) left the next i2c
+  request and every one after it unanswered until the device was
+  unplugged.
 
 Before each step, the experiments write a breadcrumb to
 `results/breadcrumb` and sync it, as `run-tests.sh` does, so after a wedged
@@ -193,6 +196,30 @@ candidates are the reset inputs of the decoder and of the audio ADC.
 `read`, `write`, `mode`, `i2c` and `capture` do single steps by hand, and
 `analyze` prints the statistics of a capture file again. `--unsafe` lifts
 the guards of `bridge.py`.
+
+## A logic analyzer on the i2c bus
+
+The measurements of [I2C engines](../../docs/protocol.md#i2c-engines)
+were taken with an fx2lafw analyzer and sigrok on the Le Potato, with the
+driver unloaded and `probe.py i2c` running the transfers:
+
+- On the SAA7113H (QFP44) SDA is pin 23 and SCL pin 24; ground to the
+  board's ground. On the analyzer SDA was on PB4 (D4) and SCL on PB6 (D6).
+- A lead on SDA makes the 0xff second bytes and the lost 0x84 writes go
+  away. To see them, connect SCL and ground only.
+- The leads come off easily: a capture without a single edge means no
+  contact, not an idle bus. Check before trusting a run.
+- The analyzer shares the USB host with the EasyCAP: 2 and 4 MHz capture
+  without loss for the first 6 s or so, 12 MHz for 3 s, and 24 MHz wrote
+  no file.
+- `sigrok-cli --scan` without `-d fx2lafw` probes every USB device, the
+  EasyCAP included; don't.
+
+```
+sigrok-cli -d fx2lafw --config samplerate=4m \
+    --channels D4=SDA,D6=SCL --time 5s -o cap.sr
+sigrok-cli -i cap.sr -P i2c:scl=SCL:sda=SDA --protocol-decoder-samplenum
+```
 
 ## Offline tests
 

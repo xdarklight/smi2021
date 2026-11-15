@@ -103,10 +103,15 @@ drop, but a clean run needs a restart of `play-signal.sh` when it starts.
   the initialization again when it finds that bit set; this driver has no
   suspend or resume handling. Whether streaming works after a resume, and
   whether the driver has to initialize the device again, is not known.
-- **A logic analyzer on the decoder's I2C bus**: about one in five
-  combined reads (command 0xe0) is not acknowledged in all 16 retries of
-  the firmware, and the driver retries them. The firmware's routine was
-  checked, so the bus is where to look.
+- **A scope on the decoder's I2C bus**: whether SDA rises before SCL has
+  fallen when the bridge releases its acknowledge in a read of two bytes,
+  and why writes with 0x84 are lost; a logic analyzer can't show it, as
+  its lead on SDA makes both go away. See
+  [I2C engines](protocol.md#i2c-engines); the hookup is in
+  [`tools/bridge-probe`](../tools/bridge-probe/README.md#a-logic-analyzer-on-the-i2c-bus).
+- **The cheap USB cable of 2026-11-13**, on a port of a hub: whether the
+  one in five failed reads of 0xe0 of that day come back with it. Only
+  worth it if the retries of the driver are to go.
 - **A multimeter or scope**, experiment 7 of [Experiments](hardware.md#experiments):
   where `PC0` and `PC4` go (neither chip's reset nor the LED), and `PC1`,
   which was not driven.
