@@ -155,6 +155,10 @@ What OpenSMI21 implements but no test reaches yet:
 - Images over 7502 bytes, the largest known to work, though program memory
   is 8 KB, and `SPM`, the one instruction of experiment 8 not tried. Both
   only matter once the firmware outgrows the limit.
-- Why an interrupt that waited long with interrupts disabled enters the
-  reset vector. `IRQ=1` avoids it, and has a safety net for it, but the
-  cause is not known.
+- The interrupt that enters the reset vector: `tools/irqprobe` found it
+  to come when the controller's request changes, the host taking a
+  queued packet, while a request is pending, within a few dozen cycles
+  of the interrupt starting (see [Interrupt
+  faults](hardware.md#interrupt-faults)). Whether other events do the
+  same, and what 0x1502 bit 3 is, are open; `IRQ=1` avoids the fault and
+  has a safety net for it, `IRQ=0` doesn't meet it.

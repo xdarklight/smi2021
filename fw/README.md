@@ -437,9 +437,12 @@ Version 0.1 on an EasyCAP 002, uploaded through the bootloader with
 
 Points most likely to need attention next:
 
-- **Interrupts**: why an interrupt that waited long enters the reset
-  vector is not known for certain; the safety net at the reset vector
-  takes any that still do. `IRQ=0` stays the default.
+- **Interrupts**: an interrupt enters the reset vector when the
+  controller's request changes while one is pending, within a few dozen
+  cycles of the interrupt starting (`docs/hardware.md` "Interrupt faults",
+  found with `tools/irqprobe`). `IRQ=1` keeps requests from waiting, and
+  the safety net at the reset vector takes any that still enter it.
+  `IRQ=0` stays the default.
 - **Event handling inferred from the documents**: enumeration works, so
   clearing 0x1502 bit 4 by read-modify-write, the status stage of IN
   transfers that the hardware completes itself and the address change

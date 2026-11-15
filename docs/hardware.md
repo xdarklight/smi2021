@@ -269,6 +269,43 @@ request waited: a few dozen cycles never showed it, 60 to some hundreds of
 cycles about once in 500 to 700 interrupts taken there, 1000 cycles and
 more never.
 
+A probe build of OpenSMI21 (EasyCAP 002, 2026-11-15, interrupts disabled
+throughout but for windows of one instruction, `SEI`, `NOP`, `CLI`, the
+events polled by the main loop, the handler only counting) narrowed it
+down (observed):
+
+- A request raised while none was pending is taken through vector 11 at
+  any delay: after 0x1502 bit 4 rose for a setup packet, some 110000
+  windows at 20 to 1040 cycles in five runs, and after 0x1518 bit 7 rose
+  for an OUT packet, 9505 windows, all through vector 11, none through the
+  reset vector.
+- A request found already pending, raised at an unknown time, went
+  through the reset vector once in 110 to 200 in the main loop of the
+  first run and once in 2300 to 7000 in later ones; right after the
+  firmware queued a packet of the control endpoint (0x151c bit 7 set), a
+  request was pending every time, and 227, 244 and 253 of 20002 windows
+  there went through the reset vector, whether the controller's
+  registers were read just before the window or not. Where they were
+  read, 0x1502 read 0x09 before every one of these, though most windows
+  after 0x09 still went through vector 11; 0x05, 0x01 and 0x1d never
+  came before one.
+- Opened at a varying time after the firmware queued a packet, the window
+  went through the reset vector 14 times in 20002, and only when the host
+  had taken the packet (0x151c bit 7 cleared) at most some 40 cycles
+  before the window or by the first poll after it: 14 of some 700
+  windows in that span, none of the 19300 elsewhere, from some 1300
+  cycles before to some 170 after.
+
+So the fault comes when the controller's request changes while one is
+pending, here because the host took a queued packet, within a few dozen
+cycles of the interrupt starting. A request that was pending for long
+when interrupts were enabled again meets that only if another event
+comes at that moment, which fits the rates above: the main loop that
+polled with interrupts disabled for some 60 cycles enabled them while a
+request was pending, so an event of the transfer under way could meet
+the moment; with the handler servicing the events promptly, requests
+rarely wait, and none met it. The tools are `tools/irqprobe`.
+
 **Cause (inferred).** The core appears to be the AVR Core of opencores.org,
 see [CPU core](#cpu-core-1) under the comparison. In its 2006 sources, an
 interrupt starts in the first cycle of any instruction that isn't marked
@@ -285,11 +322,12 @@ interrupt separately, from the same request lines at the same clock edge.
 That is consistent as long as the requests change with the CPU clock; a
 request from another clock domain, as the USB controller's presumably is,
 that changes right at that edge can start an interrupt with vector address
-0, and so can a version that takes the address a cycle later. Why only
-requests that waited between a few dozen and some hundreds of cycles meet
-it is not known; the request may change once at about that time after it
-was raised. None of this was checked against an older version of the
-sources, which were not available.
+0, and so can a version that takes the address a cycle later. The probe
+above found the request changing at that moment: the controller lowers
+or changes its request when an event comes while one is pending,
+presumably, and an interrupt that starts then gets vector address 0. None
+of this was checked against an older version of the sources, which were
+not available.
 
 **The original firmware** meets neither fault as far as its code shows: its
 compiler keeps saved registers on a software stack, so the image has no
