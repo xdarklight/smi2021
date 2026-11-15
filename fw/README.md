@@ -63,10 +63,10 @@ with 0xff to a multiple of 62 bytes, as the bootloader takes it. The build
 fails if the image grows beyond 7502 bytes, the largest image known to
 work, though program memory is 8 KB. `make` also runs `check.sh`, see
 [Checks](#checks). Built with avr-gcc 7.3.0 and the defaults, version 0.1
-is 3378 bytes, 3410 padded (55 upload units); with `IRQ=1`, 3760 bytes,
+is 3398 bytes, 3410 padded (55 upload units); with `IRQ=1`, 3780 bytes,
 3782 padded (61 upload units). It also builds with avr-gcc 16.2.0,
-binutils 2.47 and avr-libc 2.3.2 (Arch Linux), to 3272 bytes, 3286 padded
-(53 upload units), and 3656 bytes with `IRQ=1`.
+binutils 2.47 and avr-libc 2.3.2 (Arch Linux), to 3298 bytes, 3348 padded
+(54 upload units), and 3682 bytes with `IRQ=1`.
 
 The Linux driver uploads it from `smi2021/opensmi21.bin` in the firmware
 directory, the name it would have in linux-firmware:
@@ -420,6 +420,16 @@ Version 0.1 on an EasyCAP 002, uploaded through the bootloader with
   unchanged; the stall test and the driver tests passed as before. No
   host at hand sends a short packet within the data stage, so ending it
   early is not tested.
+- **Lost i2c writes**: with the Linux driver, about one write in a hundred
+  to the decoder failed in every try and was lost, where
+  `smi2021_3c.bin` lost none, and a lost write of the decoder's 0x08 left
+  it at 60 Hz after a switch to PAL. The firmware cleared the status of
+  the engine within some 10 cycles of the last poll; builds that clear it
+  later, as the original does, lost none of 16000 writes, see
+  `docs/hardware.md` "I2C engines". It now waits 1 µs and reads the
+  status again before it clears it; that build, byte for byte, lost none
+  of 16000 writes, left no register wrong in 100 switches of the
+  standard, and passed steps 4 to 10 of the hardware tests in PAL.
 
 ## Untested and risks
 

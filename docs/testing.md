@@ -39,9 +39,10 @@ Still to do:
   poll. Builds that clear it later, as the original does, lost none of
   16000 writes and no register in 100 switches, see [I2C
   engines](hardware.md#i2c-engines); with the variant that waits 1 µs,
-  `run-tests.sh` steps 4 to 10 passed in PAL. Still to do: make that
-  change in OpenSMI21, then the regression, and whether the reads that
-  failed more often with OpenSMI21 (53 tries in 1000) improve as well.
+  `run-tests.sh` steps 4 to 10 passed in PAL. OpenSMI21 now does the
+  same, in an image identical to that variant. Still to do: the rest of
+  the regression with it, and whether the reads that failed more often
+  with OpenSMI21 (53 tries in 1000) improve as well.
 - Read the reply after each write in the driver, and retry a failed one,
   as reads do. With the vendor's images that reports nothing (see
   [Register access requests](protocol.md#register-access-requests)), so

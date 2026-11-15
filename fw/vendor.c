@@ -10,6 +10,7 @@
 
 #include "fw.h"
 #include "regs.h"
+#include <util/delay.h>
 
 /* All IN vendor requests have this bRequest */
 #define VENDOR_REQUEST		0x01
@@ -216,6 +217,13 @@ static uint8_t i2c_xfer(uint16_t base, uint8_t slave, uint8_t cmd,
 				break;
 		}
 
+		/*
+		 * Clearing the status within some 10 cycles of the last poll
+		 * loses transfers, the original takes some 15 (docs/hardware.md
+		 * "I2C engines"): wait, and read the status again
+		 */
+		_delay_us(1);
+		st = REG8(base + I2C_STATUS);
 		failed = !t || (st & I2C_ST_FAIL);
 		REG8(base + I2C_STATUS) = 0;
 	}
