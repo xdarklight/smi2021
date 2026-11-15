@@ -86,8 +86,9 @@
  */
 #define SMI2021_I2C_CMD_NAK		BIT(0)
 /*
- * Even so, about one read in five fails, independently of the ones before
- * it, so a read is tried again a few times. Writes have not been seen to
+ * Even so, reads have been seen to fail in about one of five, independently
+ * of the ones before them, on one setup and not on another, for reasons not
+ * known. So a read is tried again a few times. Writes have not been seen to
  * fail.
  */
 #define SMI2021_I2C_READ_TRIES		8
