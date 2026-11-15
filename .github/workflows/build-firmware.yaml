@@ -42,14 +42,18 @@ jobs:
         run: |
           stat -c '%s bytes' fw/build/opensmi21.bin
 
-      - name: Report SHA-256 checksum
+      - name: Generate SHA-256 checksum
         run: |
-          sha256sum fw/build/opensmi21.bin
+          cd fw/build
+          sha256sum opensmi21.bin > opensmi21.bin.sha256
+          cat opensmi21.bin.sha256
 
       - name: Upload firmware binary
         uses: actions/upload-artifact@v7
         with:
           name: opensmi21-firmware
-          path: fw/build/opensmi21.bin
+          path: |
+            fw/build/opensmi21.bin
+            fw/build/opensmi21.bin.sha256
           if-no-files-found: error
           retention-days: 30
