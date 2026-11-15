@@ -382,7 +382,10 @@ that an earlier transfer left the decoder's subaddress at, without any
 failure in the reply (observed): about 4 % with `smi2021_3c.bin` and with
 OpenSMI21 on 2026-11-15, about a quarter on 2026-11-13. So the setting of
 the subaddress with 0x84 is lost that often, and as a write, without a
-trace. Why is not known.
+trace. Why is not known. The pause of the Windows driver doesn't help:
+in 1000 pairs each, in alternating blocks, 3.9 % read the wrong register
+without a pause between the two requests and 3.6 % with 10 ms (observed,
+`smi2021_3c.bin`, no lead of a logic analyzer on the bus).
 
 0xe0 with one address byte, the subaddress, does the combined write and
 read of the SAA7113H datasheet in one transfer; the reply has the
