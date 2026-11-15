@@ -225,9 +225,9 @@ Mode 5 is video and audio capture from the decoder and the audio ADC. Mode
 2 is audio only, and sends the audio data without chunks, see
 [Isochronous stream](#isochronous-stream). Mode 3 presumably streams a
 transport stream, see [Transport stream input](#transport-stream-input).
-What the engine of mode 4 does is not known. This driver uses mode 3 as
-standby, which is harmless as it selects alternate setting 0 at the same
-time.
+What the engine of mode 4 does is not known. This driver selects mode 3
+while it does not stream, which is harmless as it selects alternate setting
+0 at the same time.
 
 Changing the mode does not stop the engines of the previous one, except for
 the engines that the new mode resets.

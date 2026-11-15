@@ -43,12 +43,16 @@
 #define SMI2021_ISOC_PACKETS		10
 
 /*
- * Modes set with a hardware state request. The firmware starts in standby and
- * also knows the mode 0x04, whose purpose is unknown.
+ * Modes set with a hardware state request. The firmware also knows the mode
+ * 0x04, whose purpose is unknown. It starts in the transport stream mode,
+ * which this driver also selects while it does not stream: the engine of that
+ * mode only starts with a non-zero alternate setting.
  */
 #define SMI2021_MODE_AUDIO		0x02
-#define SMI2021_MODE_STANDBY		0x03
+#define SMI2021_MODE_TS			0x03
 #define SMI2021_MODE_CAPTURE		0x05
+/* Not a mode of the firmware: no stream is running */
+#define SMI2021_MODE_NONE		0x00
 
 /* Head byte of a register access request */
 #define SMI2021_REG_CTRL_HEAD		0x0b
@@ -537,9 +541,9 @@ static void smi2021_toggle_audio(struct smi2021 *smi2021, bool enable)
 }
 
 /*
- * Neither the standby mode nor alternate setting 0 stops the engines that a
- * capture mode started, so clear their control registers the way the firmware
- * does when it enters the mode.
+ * Neither the transport stream mode nor alternate setting 0 stops the engines
+ * that a capture mode started, so clear their control registers the way the
+ * firmware does when it enters the mode.
  */
 static void smi2021_stop_engines(struct smi2021 *smi2021)
 {
@@ -554,17 +558,17 @@ static void smi2021_stop_stream(struct smi2021 *smi2021)
 
 	lockdep_assert_held(&smi2021->stream_lock);
 
-	if (mode == SMI2021_MODE_STANDBY)
+	if (mode == SMI2021_MODE_NONE)
 		return;
 
 	smi2021_kill_isoc(smi2021);
-	smi2021->stream_mode = SMI2021_MODE_STANDBY;
+	smi2021->stream_mode = SMI2021_MODE_NONE;
 
 	if (mode == SMI2021_MODE_CAPTURE)
 		v4l2_subdev_call(smi2021->decoder, video, s_stream, 0);
 
 	smi2021_stop_engines(smi2021);
-	smi2021_set_mode(smi2021, SMI2021_MODE_STANDBY);
+	smi2021_set_mode(smi2021, SMI2021_MODE_TS);
 	usb_set_interface(smi2021->udev, smi2021->ifnum, SMI2021_ALT_IDLE);
 
 	smi2021_free_isoc(smi2021);
@@ -598,7 +602,7 @@ static int smi2021_start_stream(struct smi2021 *smi2021, u8 mode)
 	rc = usb_set_interface(smi2021->udev, smi2021->ifnum,
 			       SMI2021_ALT_STREAM);
 	if (rc)
-		goto err_standby;
+		goto err_idle;
 
 	smi2021->stream_mode = mode;
 
@@ -617,8 +621,8 @@ static int smi2021_start_stream(struct smi2021 *smi2021, u8 mode)
 
 	return 0;
 
-err_standby:
-	smi2021_set_mode(smi2021, SMI2021_MODE_STANDBY);
+err_idle:
+	smi2021_set_mode(smi2021, SMI2021_MODE_TS);
 err_stop_decoder:
 	if (mode == SMI2021_MODE_CAPTURE)
 		v4l2_subdev_call(smi2021->decoder, video, s_stream, 0);
@@ -634,7 +638,7 @@ err_stop_decoder:
  */
 static int smi2021_set_stream(struct smi2021 *smi2021)
 {
-	u8 want = SMI2021_MODE_STANDBY;
+	u8 want = SMI2021_MODE_NONE;
 
 	lockdep_assert_held(&smi2021->stream_lock);
 
@@ -651,7 +655,7 @@ static int smi2021_set_stream(struct smi2021 *smi2021)
 		 * A video capture keeps streaming when the pcm device starts
 		 * or stops, only the audio engine has to follow it.
 		 */
-		if (want != SMI2021_MODE_STANDBY)
+		if (want != SMI2021_MODE_NONE)
 			smi2021_toggle_audio(smi2021, smi2021->audio_wanted);
 
 		return 0;
@@ -659,7 +663,7 @@ static int smi2021_set_stream(struct smi2021 *smi2021)
 
 	smi2021_stop_stream(smi2021);
 
-	if (want == SMI2021_MODE_STANDBY)
+	if (want == SMI2021_MODE_NONE)
 		return 0;
 
 	return smi2021_start_stream(smi2021, want);
@@ -796,8 +800,8 @@ static int smi2021_usb_probe(struct usb_interface *intf,
 	smi2021->iso_size = usb_endpoint_max_periodic_payload(udev, ep);
 	/* In microframes, the descriptor holds the exponent plus one */
 	smi2021->iso_interval = 1 << (ep->desc.bInterval - 1);
-	/* The firmware starts in standby, so nothing is streaming yet */
-	smi2021->stream_mode = SMI2021_MODE_STANDBY;
+	/* The firmware starts in the transport stream mode, but not streaming */
+	smi2021->stream_mode = SMI2021_MODE_NONE;
 
 	mutex_init(&smi2021->reg_lock);
 	mutex_init(&smi2021->v4l2_lock);

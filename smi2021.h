@@ -106,9 +106,9 @@ struct smi2021 {
 	 */
 	struct mutex			stream_lock;
 	/*
-	 * Mode of the running stream, standby while nothing is streaming.
-	 * Also read by the URB completion handler, which only runs while it
-	 * does not change.
+	 * Mode of the running stream, SMI2021_MODE_NONE while nothing is
+	 * streaming. Also read by the URB completion handler, which only runs
+	 * while it does not change.
 	 */
 	u8				stream_mode;
 	/* Whether the video device and the pcm device want data */
