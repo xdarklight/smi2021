@@ -418,6 +418,20 @@ the decoder, at the write address or at the subaddress, and the retry
 succeeded each time; with `smi2021_3c.bin` no try failed in 947 reads
 (observed, one capture each).
 
+Writes with 0xc0 do fail in all tries with OpenSMI21 (observed, EasyCAP
+002, 2026-11-15, the driver of 1349e8e, a root port). Writing 0x15,
+0x16, 0x17 and 0x08 of the decoder in turn, the values of one standard
+and then of the other, without reading between the writes, 0.25 to 2.5 %
+of the writes were reported as failed in bit 0 of the command in the
+reply, and those writes, and only those, were lost: the register kept
+its value. Most were writes of 0x08, 0x16 and 0x17; it happened with
+2 ms or 10 ms between the requests as well as with none. In the same
+way, the driver's switch of the standard lost a write of the decoder in
+36 of 100 switches from NTSC to PAL that followed a switch to NTSC right
+away. The 6000 writes above, each read back before the next one, all
+arrived. Whether `smi2021_3c.bin` loses writes in the same way was not
+tested.
+
 The 0xff as the second byte and the lost 0x84 depend on the load on SDA
 (observed): with a lead of the logic analyzer on SDA both disappear (none
 in 2000 and 1400), with a lead on SCL alone they stay, and they return

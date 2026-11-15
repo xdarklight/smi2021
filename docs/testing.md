@@ -21,32 +21,53 @@ changes again.
 but not with the driver as it is now; it is not the default, so this is
 only worth repeating before it becomes one.
 
+## Decoder writes that get lost
+
+The driver doesn't look at the reply to an i2c write, so a write that the
+firmware reports as failed goes unnoticed. With OpenSMI21, about one write
+in a hundred fails that way, see [I2C engines](protocol.md#i2c-engines).
+When it is the write of the decoder's register 0x08 in a switch to PAL,
+the decoder stays at 60 Hz: the input reports no signal, every buffer
+comes back with `V4L2_BUF_FLAG_ERROR`, and as S_STD to the standard that
+is set does nothing, only binding the driver again gets it out. Seen in 6
+of 100 switches from NTSC to PAL straight after a switch to NTSC.
+
+Still to do:
+
+- Read the reply after each write in the driver, and retry a failed one,
+  as reads do; then repeat the switches and the write test, which writes
+  four registers of the decoder back to back and reads them back.
+- The same test with `smi2021_3c.bin`, which needs a replug: whether the
+  vendor firmware loses writes as well, or only OpenSMI21, which also has
+  reads fail far more often (53 tries in 1000 against none in 947).
+- If it is OpenSMI21's, find what its i2c transfers do differently.
+
 ## With somebody at the board
 
-These need the cable or the device pulled, or can take the board down.
-They all ran before f8e363b, which changed what the disconnect and the
-unbind do, so they need to run again:
+Done on 2026-11-15 with the driver and the firmware of the regression
+above:
 
-- Step 11, the composite cable pulled while video and audio stream.
-- Step 12, unbinding while streaming, in the capture mode and in the
-  audio only mode.
-- Step 13, unplugging while streaming, in the capture mode and in the
-  audio only mode, and with both streams running. No process may be left
-  stuck, and the kernel log must stay free of oopses and of "urb resubmit
-  failed".
-- New with 77c99d9: with `i2c-dev` loaded and the video device held open
-  (for example `v4l2-ctl --sleep-forever`), unplug the device and run
-  `i2cdetect -y N` on the smi2021 adapter. Every access must fail, without
-  an oops, and closing the video device afterwards must free everything.
+- Step 11, the composite cable pulled for some seconds while video and
+  audio streamed, in NTSC and in PAL: the input status followed, no
+  buffer was flagged, no frame was dropped, and the audio had no gap at
+  the pulls.
+- A capture started without a cable, which was then plugged in, in NTSC
+  and in PAL: no buffer flagged.
+- Step 12, unbinding while streaming video, audio only, and both: every
+  process ended within 10 s, and binding again brought both devices back.
+- Step 13, unplugging while streaming video and audio with the video
+  device held open by another process, while streaming video, and while
+  streaming audio only: nothing was left stuck, and the kernel log had
+  nothing but the disconnect.
+- With the video device held open after the unplug, register reads of the
+  decoder through `i2c-dev` failed cleanly (`i2cget`; `i2cdetect` needs
+  transfers the adapter doesn't offer), and both devices went once it was
+  closed.
 - The transitions of "PAL frames are accepted only at the full 288 lines
-  per field" in [`README.md`](../README.md): count the buffers flagged
-  with `V4L2_BUF_FLAG_ERROR` in PAL after switching the standard,
-  switching the input, pulling the cable while streaming and starting the
-  capture before the source has locked, against the same in NTSC. A
-  steady PAL source already delivers every frame (step 6), so only the
-  transitions are open.
-
-Each needs a replug at most; batch them.
+  per field" in [`README.md`](../README.md): a switch of the standard, of
+  the input to each of the others and back, the cable pulled and a capture
+  started without a signal, in PAL: no buffer flagged, apart from the lost
+  writes above.
 
 ## Long runs
 

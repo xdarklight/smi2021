@@ -194,7 +194,9 @@ tolerates none: `smi2021_field_done()` wants the full
 makes the frame come back with `V4L2_BUF_FLAG_ERROR`, or be dropped outright if
 it was the first field of the frame.
 
-Whether real hardware ever sends a short PAL field is untested. To find out:
+On an EasyCAP 002, none of the transitions below flagged a buffer in PAL,
+see [`docs/testing.md`](docs/testing.md), apart from a lost write of the
+decoder that left it at 60 Hz. To check another device:
 
 1. Lock a stable PAL source on the selected input and check that the decoder
    agrees before capturing anything:
