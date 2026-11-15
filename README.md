@@ -187,8 +187,9 @@ stuck process behind.
 With the decoder settings the driver uses, the decoder flags 288 active lines
 per field for 625 line standards and 244 or 243 for 525 line ones, see
 [`docs/protocol.md`](docs/protocol.md). The driver captures 288 lines per field
-for PAL and 240 for NTSC, so NTSC tolerates a field that is a few lines short
-while PAL tolerates none: `smi2021_field_done()` wants the full
+for PAL, and for NTSC 240 after skipping the first two, so an NTSC field may
+be up to two lines short (the first field) or one line (the second) while PAL
+tolerates none: `smi2021_field_done()` wants the full
 `720 * 2 * 288` bytes before it accepts a field, and a field that falls short
 makes the frame come back with `V4L2_BUF_FLAG_ERROR`, or be dropped outright if
 it was the first field of the frame.

@@ -354,6 +354,19 @@ static unsigned int smi2021_field_lines(const struct smi2021 *smi2021)
 	return smi2021->cur_height / 2;
 }
 
+/*
+ * With 525 lines the decoder flags lines 20-263 and 283-525 as active (Table
+ * 9 of the SAA7113H datasheet). The first two of each field are the VBI line
+ * 20 and line 21, which carries closed captions, and the half line 283 and
+ * line 284. Skip them, so that the lines captured are 22-261 and 285-524, as
+ * with the vendor's Windows drivers. With 625 lines the decoder flags lines
+ * 23-310 and 336-623, which are all captured.
+ */
+static unsigned int smi2021_skip_lines(const struct smi2021 *smi2021)
+{
+	return smi2021->cur_height == SMI2021_NTSC_LINES ? 2 : 0;
+}
+
 /* Whether all lines of the current field have been received */
 static bool smi2021_field_done(struct smi2021 *smi2021,
 			       const struct smi2021_buf *buf)
@@ -412,6 +425,8 @@ static void smi2021_parse_trc(struct smi2021 *smi2021, u8 trc)
 		 */
 		if (!buf)
 			smi2021->sequence++;
+		else
+			buf->skip_lines = smi2021_skip_lines(smi2021);
 	}
 
 	if (!buf)
@@ -428,6 +443,12 @@ static void smi2021_parse_trc(struct smi2021 *smi2021, u8 trc)
 
 		buf->second_field = true;
 		buf->pos = 0;
+		buf->skip_lines = smi2021_skip_lines(smi2021);
+	}
+
+	if (!buf->in_blank && buf->skip_lines) {
+		buf->skip_lines--;
+		buf->in_blank = true;
 	}
 }
 

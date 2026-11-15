@@ -27,6 +27,7 @@ typedef uint32_t u32;
 #define guard(x)		(void)
 
 #define SMI2021_BYTES_PER_LINE	1440
+#define SMI2021_NTSC_LINES	480
 #define SMI2021_TRC_H		BIT(4)
 #define SMI2021_TRC_V		BIT(5)
 #define SMI2021_TRC_F		BIT(6)
@@ -77,6 +78,7 @@ struct smi2021_buf {
 	void *mem;
 	bool second_field;
 	bool in_blank;
+	unsigned int skip_lines;
 	unsigned int pos;
 };
 
@@ -222,6 +224,8 @@ struct test {
 static int run(const struct test *t, unsigned int chunk)
 {
 	unsigned int lines_per_field = t->height / 2;
+	/* The driver skips the first two active lines of each NTSC field */
+	int skip = t->height == SMI2021_NTSC_LINES ? 2 : 0;
 	size_t frame_size = SMI2021_BYTES_PER_LINE * t->height;
 	/* The frame ends right at the trailing guard, to catch overruns */
 	u8 *frame_mem = backing + sizeof(backing) - GUARD - frame_size;
@@ -268,7 +272,7 @@ static int run(const struct test *t, unsigned int chunk)
 				  SMI2021_BYTES_PER_LINE;
 
 			for (col = 0; col < SMI2021_BYTES_PER_LINE; col++) {
-				u8 want = expected(2, field, line, col,
+				u8 want = expected(2, field, line + skip, col,
 						   t->inject);
 
 				if (dst[col] == want)
@@ -349,7 +353,7 @@ static int run_sequence(void)
 int main(void)
 {
 	static const struct test tests[] = {
-		{ "NTSC, 240 active lines",	  480, 240, 240, false, false, 1, 1, 0 },
+		{ "NTSC, 242 active lines (shortest)", 480, 242, 242, false, false, 1, 1, 0 },
 		{ "NTSC, 244 active lines (field 1)", 480, 244, 244, false, false, 1, 1, 0 },
 		{ "NTSC, 243 active lines (field 2)", 480, 243, 243, false, false, 1, 1, 0 },
 		{ "PAL, 288 active lines",	  576, 288, 288, false, false, 1, 1, 0 },

@@ -428,7 +428,8 @@ easycap-somagic-linux write 0x40 for either standard (reported), and so get
 286 lines per field with 625 lines. The driver keeps VRLN = 1, which the
 saa7115 driver sets for the saa7113 but not for the GM7113C, as the decoder
 disables the chrominance comb filter for NTSC and the phase error correction
-for PAL outside of VREF.
+for PAL outside of VREF. With 525 lines it skips the first two active lines
+of each field, so that it captures the same lines as the Windows driver.
 
 **Audio data** is a stream of 32 bit little endian containers, each holding
 a 24 bit sample in its upper three bytes and 0x00 in its lowest byte,

@@ -60,6 +60,8 @@ struct smi2021_buf {
 	bool				second_field;
 	/* Set while the device is sending blanking instead of video */
 	bool				in_blank;
+	/* Active lines still to be skipped at the start of the field */
+	unsigned int			skip_lines;
 	/* Bytes of active video received for the current field */
 	unsigned int			pos;
 };
