@@ -34,6 +34,18 @@
 #define SMI2021_TRC_V			BIT(5)	/* vertical blanking */
 #define SMI2021_TRC_F			BIT(6)	/* second field */
 
+struct smi2021_input {
+	const char			*name;
+	/* Input of the decoder that the connector is wired to */
+	u32				route;
+};
+
+struct smi2021_board {
+	const char			*name;
+	const struct smi2021_input	*inputs;
+	unsigned int			num_inputs;
+};
+
 /*
  * All inputs of the decoder that a board may have connected, for a board
  * that smi2021_identify_board() does not know.

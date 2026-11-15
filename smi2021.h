@@ -66,12 +66,6 @@ struct smi2021_buf {
 	unsigned int			pos;
 };
 
-struct smi2021_input {
-	const char			*name;
-	/* Input of the decoder that the connector is wired to */
-	u32				route;
-};
-
 /*
  * The boards that smi2021_identify_board() tells apart by their straps, see
  * Board identification in docs/protocol.md
@@ -80,12 +74,6 @@ enum smi2021_board_type {
 	SMI2021_BOARD_UNKNOWN,		/* offers all inputs of the decoder */
 	SMI2021_BOARD_DC60,
 	SMI2021_BOARD_EASYCAP002,
-};
-
-struct smi2021_board {
-	const char			*name;
-	const struct smi2021_input	*inputs;
-	unsigned int			num_inputs;
 };
 
 struct smi2021 {
