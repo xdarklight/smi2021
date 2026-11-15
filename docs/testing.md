@@ -40,9 +40,14 @@ Still to do:
   16000 writes and no register in 100 switches, see [I2C
   engines](hardware.md#i2c-engines); with the variant that waits 1 µs,
   `run-tests.sh` steps 4 to 10 passed in PAL. OpenSMI21 now does the
-  same, in an image identical to that variant. Still to do: the rest of
-  the regression with it, and whether the reads that failed more often
-  with OpenSMI21 (53 tries in 1000) improve as well.
+  same (0d9db23), in an image identical to that variant; with it,
+  `v4l2-compliance -s` passed in PAL with 132 of 132, and 20 rounds of
+  rebinding passed. Of 2000 raw reads each, with the driver unloaded,
+  the second byte of an 0xe0 read of two bytes was 0xff in 3.0 %, where
+  it had been 25 %, the vendor's 3 to 7 %; 0x84 and 0xa0 read the wrong
+  register in 4.6 %, as with either firmware before. Not run again, as
+  the change doesn't reach them: streaming, audio, DMABUF, and the
+  stall and OUT tests.
 - Read the reply after each write in the driver, and retry a failed one,
   as reads do. With the vendor's images that reports nothing (see
   [Register access requests](protocol.md#register-access-requests)), so

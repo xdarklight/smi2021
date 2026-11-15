@@ -407,8 +407,8 @@ the same EasyCAP 002 (observed):
 | | 2026-11-13 | 2026-11-15 |
 |---|---|---|
 | 0xe0 reads of one byte reported as failed | about one in five | none of about 30000, with both firmwares, idle and while streaming |
-| 0x84 + 0xa0 reading the wrong register | about a quarter | 2.4 to 6.2 % |
-| second byte of an 0xe0 read of two bytes is 0xff | about one in five | 3 to 7 % with `smi2021_3c.bin`, 25 % with OpenSMI21 (one measurement) |
+| 0x84 + 0xa0 reading the wrong register | about a quarter | 2.4 to 6.2 %; 4.6 % with OpenSMI21 since 0d9db23 |
+| second byte of an 0xe0 read of two bytes is 0xff | about one in five | 3 to 7 % with `smi2021_3c.bin`, 25 % with OpenSMI21 (one measurement), 3.0 % with OpenSMI21 since 0d9db23 |
 | 0xc0 writes lost | none seen | none of 6000, each read back |
 
 The known differences between the two days are the USB cable, a very
