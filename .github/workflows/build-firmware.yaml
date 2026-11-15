@@ -28,6 +28,12 @@ jobs:
             binutils-avr \
             avr-libc
 
+      - name: Report toolchain versions
+        run: |
+          avr-gcc --version | head -n1
+          avr-ld --version | head -n1
+          dpkg-query -W -f='avr-libc ${Version}\n' avr-libc
+
       - name: Build firmware
         working-directory: fw
         run: make
