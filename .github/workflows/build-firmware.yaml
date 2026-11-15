@@ -18,7 +18,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install AVR toolchain
         run: |
@@ -36,8 +36,12 @@ jobs:
         run: |
           stat -c '%s bytes' fw/build/opensmi21.bin
 
+      - name: Report SHA-256 checksum
+        run: |
+          sha256sum fw/build/opensmi21.bin
+
       - name: Upload firmware binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: opensmi21-firmware
           path: fw/build/opensmi21.bin
