@@ -218,7 +218,12 @@ following:
    then the documented stall rules; then the bounds.
 6. **i2c**: 17 tries at most ("up to 16 retries"). Each wait for the
    engine gives up after 50000 polls of the status register, some 20 ms at
-   30 MHz, and counts as a failed try.
+   30 MHz, and counts as a failed try. Reads of more than one byte go to
+   the engine as one transfer, as in the original, although on an EasyCAP
+   002 the bytes after the first can be 0xff without a failure (see
+   `docs/protocol.md` "I2C engines"). Splitting them into reads of one
+   byte would avoid that, but was left out so that a host sees the same
+   on both firmwares; the Linux driver only reads single bytes.
 7. **Mode request**: modes other than 2 to 5 and a request with only one
    byte are stalled and leave the mode alone, so the mode reply never reads
    0x07, which hosts take for the bootloader. The inactive block is written
