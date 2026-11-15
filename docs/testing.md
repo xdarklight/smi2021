@@ -9,23 +9,13 @@ for yet are in [Open questions](protocol.md#open-questions).
 
 ## Regression on the current tree
 
-The driver has changed since most of its tests ran: one lock for the
-ioctls and the queue (e571a20), register accesses refused once the device
-is gone (77c99d9), the stream stopped before the teardown (f8e363b), the
-delays of the vendor's initialization (eaaa164), the board identified by
-its straps (44d1cfe) and OpenSMI21 uploaded instead of a vendor firmware
-(d144698). With all of them, and the default build of OpenSMI21
-(`IRQ=0`), only steps 4 to 10 of `run-tests.sh` in PAL have run. Still to
-run, with the driver and the firmware as they are:
-
-- `run-tests.sh` steps 1 to 10 in NTSC, and 1 to 3 in PAL.
-- `v4l2-compliance -s` in both standards, which adds the streaming and
-  read/write tests to step 5; this is the output to attach to the
-  upstream posting.
-- All of `stress.sh` in PAL and in NTSC. The rebind test runs the new
-  initialization delays and the board identification each round.
-- `dmabuf-test.py`.
-- `soak.py` for an hour, see [Long runs](#long-runs).
+Done on 2026-11-15 with the driver of 1349e8e and the default build of
+OpenSMI21 (`IRQ=0`), uploaded by the driver: in PAL and in NTSC,
+`run-tests.sh` steps 1 to 10, `v4l2-compliance -s` (132 of 132, no
+warnings), all of `stress.sh` with 20 rounds and `dmabuf-test.py`;
+`stall-test.py` and `out-test.py` once. See [Long runs](#long-runs) for
+the hour of each. Nothing open here until the driver or the firmware
+changes again.
 
 `IRQ=1` passed steps 2 to 10 in both standards and `stress.sh` in NTSC,
 but not with the driver as it is now; it is not the default, so this is
@@ -60,21 +50,22 @@ Each needs a replug at most; batch them.
 
 ## Long runs
 
-The second soak in NTSC lost 37 frames in four bursts around its 40th
-minute: the frames arrived, but no buffer was queued, so userspace stalled
-for 0.2 to 0.4 s. Whether `soak.py` (a Python reader on a pipe from
-`v4l2-ctl`) or the board stalled is open:
+The second soak in NTSC, on 2026-11-13, lost 37 frames in four bursts
+around its 40th minute: the frames arrived, but no buffer was queued, so
+userspace stalled for 0.2 to 0.4 s. On 2026-11-15, with the driver and
+OpenSMI21 of the regression above, in NTSC:
 
-1. Capture for an hour to `/dev/null` with `v4l2-ctl --stream-mmap
-   --verbose --stream-to /dev/null`, flag every gap in the sequence
-   numbers, and run a loop beside it that sleeps 1 ms and reports every
-   wakeup more than 50 ms late. Ten minutes of that in PAL with four
-   buffers were clean.
-2. If the hour is clean as well, the reader is at fault: give the
-   `v4l2-ctl` of `soak.py` more buffers (`--stream-mmap=N`, an option of
-   `soak.py` to be added) and run the soak again in both standards.
-3. If the hour drops frames too, find what stalls the board, for example
-   with `trace-cmd` around the gaps.
+- An hour of `v4l2-ctl --stream-mmap=4 --verbose --stream-to /dev/null`,
+  with every gap in the sequence numbers flagged and a loop beside it
+  that slept 1 ms and reported every wakeup more than 50 ms late: 107890
+  frames, no gap, no late wakeup.
+- An hour of `soak.py`: 107892 buffers, no frame dropped, 3596 s of audio
+  with a discontinuity only where the clip loops, memory flat, nothing in
+  the kernel log.
+
+So neither the board nor the reader stalls now, and what did then is not
+known. A soak in PAL, and one that drops frames again, are what is left;
+the latter would want `trace-cmd` around the gaps.
 
 The source of the test signal also slips: mpv shows a frame for one field
 and the next for three, for minutes on end. `soak.py` tells this from a

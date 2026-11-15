@@ -130,8 +130,10 @@ The raw captures go to `SMI2021_CAPTURES`, `/tmp/smi2021-captures` by
 default, which is in memory on the board: writing them to the SD card at
 20 MB/s stalled `v4l2-ctl` for up to 1.5 s at a time, and the driver had to
 drop frames for want of buffers, which looked like a fault of the device.
-A full run keeps about 540 MB there. A capture can also be checked on its
-own:
+A full run keeps about 540 MB there, which is more than half of the
+tmpfs of a Le Potato with 2 GB; empty it before `stress.sh`, whose
+captures go to `/tmp` as well and fail with "No space left on device"
+otherwise. A capture can also be checked on its own:
 
     ./check-capture.py --video /tmp/smi2021-captures/both.uyvy \
         --audio /tmp/smi2021-captures/both.s32
