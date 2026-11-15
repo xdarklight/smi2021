@@ -750,7 +750,29 @@ Some timings of the original, counted in CPU cycles of its code, at
 the command is written, a poll takes some 12 cycles, step 5 reads the status
 some 4 cycles after the last poll, and the next try writes its command
 some 100 cycles, 3.3 µs, after the status of a failed one was cleared. It
-waits in steps 2 and 4 without a time limit. For an i2c write, it does
+waits in steps 2 and 4 without a time limit.
+
+How soon the status is cleared after step 4 matters (observed, EasyCAP
+002, 2026-11-15, OpenSMI21 built in variants, writes of the decoder
+back to back and read back afterwards, 16000 per build, and 100 switches
+of the standard with the Linux driver):
+
+| From the last poll to clearing the status | Writes lost | Switches with a register wrong |
+|---|---|---|
+| some 5 cycles, status read again just before | 213 | 27 |
+| some 9 cycles, the value of the last poll checked | 191 | 39 |
+| some 13 cycles, status read again some 4 cycles after the last poll | 0, twice | 0, twice |
+| 30 cycles' wait, status read again, cleared some 8 cycles later | 0 | 0 |
+
+A lost write was reported as failed, with every try failed. Waiting
+4 µs between a failed try and the next one did not prevent it. So the
+status should be cleared no sooner than the original does, some 15
+cycles after the last poll; why is not known. Presumably the engine
+drops bit 4 a moment before it sets its final bits, and a status cleared
+in between gets them afterwards, which the next transfer then takes for
+its own (inferred).
+
+For an i2c write, it does
 not update the reply: a failure of all tries is reported only for reads,
 and after a write, the reply is that of the last read (see [Register
 access requests](protocol.md#register-access-requests)).
